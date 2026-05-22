@@ -137,3 +137,109 @@ async def delete_transaction(tx_id, user_id):
     async with conn.cursor() as cur:
         await cur.execute("DELETE FROM transactions WHERE id=%s AND user_id=%s", (tx_id, user_id))
         await conn.commit()
+
+
+# --- Recurring payments ---
+
+async def add_recurring_payment(user_id, name, amount, type_, kind, category_id,
+                                  repeat_type, repeat_day_of_month=None,
+                                  repeat_day_of_week=None, remind_days_before=1,
+                                  amount_is_approximate=False):
+    from datetime import date, timedelta
+    pool = await get_pool()
+    # Считаем следующую дату
+    today = date.today()
+    if repeat_type == 'monthly' and repeat_day_of_month:
+        if today.day <= repeat_day_of_month:
+            next_date = today.replace(day=repeat_day_of_month)
+        else:
+            if today.month == 12:
+                next_date = today.replace(year=today.year+1, month=1, day=repeat_day_of_month)
+            else:
+                next_date = today.replace(month=today.month+1, day=repeat_day_of_month)
+    elif repeat_type == 'weekly' and repeat_day_of_week is not None:
+        days_ahead = repeat_day_of_week - today.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        next_date = today + timedelta(days=days_ahead)
+    else:
+        next_date = today + timedelta(days=1)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO recurring_payments
+               (user_id, name, amount, amount_is_approximate, type, kind, category_id,
+                repeat_type, repeat_day_of_month, repeat_day_of_week,
+                remind_days_before, next_trigger_date)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (user_id, name, amount, amount_is_approximate, type_, kind, category_id,
+             repeat_type, repeat_day_of_month, repeat_day_of_week,
+             remind_days_before, next_date)
+        )
+        await conn.commit()
+
+
+async def get_recurring_payments(user_id):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """SELECT r.*, c.name as category_name
+                   FROM recurring_payments r
+                   LEFT JOIN categories c ON r.category_id = c.id
+                   WHERE r.user_id = %s AND r.is_active = TRUE
+                   ORDER BY r.next_trigger_date""",
+                (user_id,)
+            )
+            rows = await cur.fetchall()
+    return rows
+
+
+async def get_todays_reminders():
+    """Возвращает все платежи которые нужно напомнить сегодня."""
+    from datetime import date, timedelta
+    pool = await get_pool()
+    today = date.today()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """SELECT r.*, u.id as uid
+                   FROM recurring_payments r
+                   JOIN users u ON r.user_id = u.id
+                   WHERE r.is_active = TRUE
+                     AND r.next_trigger_date - r.remind_days_before <= %s
+                     AND r.next_trigger_date >= %s
+                     AND (r.last_triggered_at IS NULL
+                          OR r.last_triggered_at::date < %s)""",
+                (today, today, today)
+            )
+            return await cur.fetchall()
+
+
+async def mark_reminder_sent(payment_id):
+    from datetime import datetime, date, timedelta
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT repeat_type, repeat_day_of_month, repeat_day_of_week, next_trigger_date FROM recurring_payments WHERE id = %s",
+                (payment_id,)
+            )
+            row = await cur.fetchone()
+        if row:
+            repeat_type, day_month, day_week, current_next = row
+            today = date.today()
+            if repeat_type == 'monthly' and day_month:
+                if today.month == 12:
+                    new_next = today.replace(year=today.year+1, month=1, day=day_month)
+                else:
+                    new_next = today.replace(month=today.month+1, day=day_month)
+            elif repeat_type == 'weekly' and day_week is not None:
+                new_next = current_next + timedelta(weeks=1)
+            else:
+                new_next = current_next + timedelta(days=1)
+            await conn.execute(
+                "UPDATE recurring_payments SET last_triggered_at = %s, next_trigger_date = %s WHERE id = %s",
+                (datetime.now(), new_next, payment_id)
+            )
+            await conn.commit()
