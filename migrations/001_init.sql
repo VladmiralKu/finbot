@@ -55,7 +55,6 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tx_user_date ON transactions(user_id, transaction_date DESC);
-CREATE INDEX IF NOT EXISTS idx_tx_user_month ON transactions(user_id, DATE_TRUNC('month', transaction_date));
 CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id);
 
 CREATE OR REPLACE FUNCTION create_default_categories(p_user_id BIGINT)

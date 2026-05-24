@@ -243,3 +243,159 @@ async def mark_reminder_sent(payment_id):
                 (datetime.now(), new_next, payment_id)
             )
             await conn.commit()
+
+
+# --- Promo codes ---
+
+async def get_promo(code: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """SELECT id, code, tier, days, max_uses, used_count, expires_at
+                   FROM promo_codes
+                   WHERE code = %s""",
+                (code.upper(),)
+            )
+            return await cur.fetchone()
+
+
+async def use_promo(user_id: int, promo_id: int, tier: str, days: int):
+    from datetime import datetime, timedelta
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Проверяем не использовал ли уже
+            await cur.execute(
+                "SELECT id FROM promo_uses WHERE user_id=%s AND promo_id=%s",
+                (user_id, promo_id)
+            )
+            if await cur.fetchone():
+                return False
+            # Активируем
+            until = datetime.now() + timedelta(days=days)
+            await cur.execute(
+                """UPDATE users SET is_premium=TRUE, premium_until=%s, subscription_tier=%s
+                   WHERE id=%s""",
+                (until, tier, user_id)
+            )
+            await cur.execute(
+                "UPDATE promo_codes SET used_count=used_count+1 WHERE id=%s",
+                (promo_id,)
+            )
+            await cur.execute(
+                "INSERT INTO promo_uses (user_id, promo_id) VALUES (%s,%s)",
+                (user_id, promo_id)
+            )
+            await conn.commit()
+            return True
+
+
+async def get_subscription_tier(user_id: int) -> str:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT subscription_tier, is_premium, premium_until FROM users WHERE id=%s",
+                (user_id,)
+            )
+            row = await cur.fetchone()
+    if not row:
+        return 'free'
+    from datetime import datetime
+    if row[1] and row[2] and row[2] > datetime.now():
+        return row[0] or 'premium'
+    if row[1] and not row[2]:
+        return row[0] or 'premium'
+    return 'free'
+
+
+async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int = 30):
+    from datetime import datetime, timedelta
+    pool = await get_pool()
+    until = datetime.now() + timedelta(days=days)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE users SET is_premium=TRUE, premium_until=%s, subscription_tier=%s
+               WHERE id=%s""",
+            (until, tier, user_id)
+        )
+        await conn.commit()
+
+
+# --- Promo codes ---
+
+async def get_promo(code: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """SELECT id, code, tier, days, max_uses, used_count, expires_at
+                   FROM promo_codes
+                   WHERE code = %s""",
+                (code.upper(),)
+            )
+            return await cur.fetchone()
+
+
+async def use_promo(user_id: int, promo_id: int, tier: str, days: int):
+    from datetime import datetime, timedelta
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            # Проверяем не использовал ли уже
+            await cur.execute(
+                "SELECT id FROM promo_uses WHERE user_id=%s AND promo_id=%s",
+                (user_id, promo_id)
+            )
+            if await cur.fetchone():
+                return False
+            # Активируем
+            until = datetime.now() + timedelta(days=days)
+            await cur.execute(
+                """UPDATE users SET is_premium=TRUE, premium_until=%s, subscription_tier=%s
+                   WHERE id=%s""",
+                (until, tier, user_id)
+            )
+            await cur.execute(
+                "UPDATE promo_codes SET used_count=used_count+1 WHERE id=%s",
+                (promo_id,)
+            )
+            await cur.execute(
+                "INSERT INTO promo_uses (user_id, promo_id) VALUES (%s,%s)",
+                (user_id, promo_id)
+            )
+            await conn.commit()
+            return True
+
+
+async def get_subscription_tier(user_id: int) -> str:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT subscription_tier, is_premium, premium_until FROM users WHERE id=%s",
+                (user_id,)
+            )
+            row = await cur.fetchone()
+    if not row:
+        return 'free'
+    from datetime import datetime
+    if row[1] and row[2] and row[2] > datetime.now():
+        return row[0] or 'premium'
+    if row[1] and not row[2]:
+        return row[0] or 'premium'
+    return 'free'
+
+
+async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int = 30):
+    from datetime import datetime, timedelta
+    pool = await get_pool()
+    until = datetime.now() + timedelta(days=days)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE users SET is_premium=TRUE, premium_until=%s, subscription_tier=%s
+               WHERE id=%s""",
+            (until, tier, user_id)
+        )
+        await conn.commit()

@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.handlers.main import router as main_router
 from app.handlers.recurring import router as recurring_router
+from app.handlers.premium import router as premium_router
 from app.database import get_pool, close_pool
 from app.scheduler import setup_scheduler
 
@@ -21,6 +22,7 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(main_router)
     dp.include_router(recurring_router)
+    dp.include_router(premium_router)
 
     await get_pool()
     logger.info("Database pool initialized")

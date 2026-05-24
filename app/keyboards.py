@@ -49,13 +49,21 @@ def confirm_keyboard(tx_id):
     ])
 
 
-def premium_keyboard(is_prem):
-    if is_prem:
+def premium_keyboard(tier: str = 'free'):
+    if tier == 'premium':
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ У вас Premium активен", callback_data="noop")],
+            [InlineKeyboardButton(text="✅ Premium активен", callback_data="noop")],
+            [InlineKeyboardButton(text="💼 Upgrade до Business", callback_data="buy_business")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+        ])
+    if tier == 'business':
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Premium Business активен", callback_data="noop")],
             [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
         ])
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Оплатить $3/мес", callback_data="pay_premium")],
+        [InlineKeyboardButton(text="⭐ Premium — 150 XTR/мес", callback_data="buy_stars_premium")],
+        [InlineKeyboardButton(text="💼 Business — 300 XTR/мес", callback_data="buy_stars_business")],
+        [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
         [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
     ])
