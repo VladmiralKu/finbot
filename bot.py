@@ -11,6 +11,7 @@ from app.handlers.recurring import router as recurring_router
 from app.handlers.premium import router as premium_router
 from app.database import get_pool, close_pool
 from app.scheduler import setup_scheduler
+from app.middleware import MaintenanceMiddleware
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 async def main():
     bot = Bot(token=os.getenv("BOT_TOKEN"))
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Middleware техобслуживания
+    dp.message.middleware(MaintenanceMiddleware())
+    dp.callback_query.middleware(MaintenanceMiddleware())
+
     dp.include_router(main_router)
     dp.include_router(recurring_router)
     dp.include_router(premium_router)
