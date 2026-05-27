@@ -317,3 +317,82 @@ async def msg_quick_input(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ])
     )
+
+
+# --- Быстрый ввод ---
+
+@router.message(F.text.regexp(r'^[+-]?\d+'))
+async def msg_quick_input(message: Message, state: FSMContext):
+    """Обрабатывает быстрый ввод транзакций типа -1500 вчера продукты бн"""
+    current_state = await state.get_state()
+    if current_state:
+        return  # Не перехватываем если идёт другой FSM
+
+    from app.parser import parse_quick_input
+    parsed = parse_quick_input(message.text)
+
+    if not parsed:
+        return
+
+    # Ищем категорию
+    categories = await get_categories(message.from_user.id, type_=parsed['type'])
+    category_id = None
+    kind = 'variable' if parsed['type'] == 'expense' else 'income'
+
+    if parsed['category_hint']:
+        for cat in categories:
+            if parsed['category_hint'].lower() in cat['name'].lower():
+                category_id = cat['id']
+                kind = cat['kind']
+                break
+
+    if not category_id and categories:
+        # Берём первую подходящую категорию
+        category_id = categories[0]['id']
+        kind = categories[0]['kind']
+
+    if not category_id:
+        await message.answer("❌ Не нашёл подходящую категорию.")
+        return
+
+    from app.database import add_transaction as _add_tx
+    from datetime import datetime
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        tx = await conn.fetchrow(
+            """INSERT INTO transactions
+               (user_id, category_id, amount, type, kind, comment,
+                transaction_date, wallet, pnl_period)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
+            message.from_user.id, category_id, parsed['amount'],
+            parsed['type'], kind, parsed['comment'],
+            parsed['transaction_date'], parsed['wallet'], parsed['pnl_period']
+        )
+
+    sign = "−" if parsed['type'] == 'expense' else "+"
+    wallet_names = {'cash': '💵 Нал', 'card': '💳 Безнал', 'other': '🔄 Другое'}
+    date_str = parsed['transaction_date'].strftime('%d.%m')
+
+    text = (
+        f"✅ <b>Записано!</b>\n\n"
+        f"{sign}{parsed['amount']:,.0f} ₽\n"
+        f"📅 {date_str}  {wallet_names.get(parsed['wallet'], '')}\n"
+    )
+    if parsed['comment']:
+        text += f"💬 {parsed['comment']}\n"
+    if parsed['pnl_period']:
+        text += f"📊 ПнЛ: {parsed['pnl_period']}\n"
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Верно", callback_data=f"confirm:{tx['id']}"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_tx:{tx['id']}"),
+            ],
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+        ])
+    )
