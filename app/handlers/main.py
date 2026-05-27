@@ -6,6 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
 
 from app.database import (
+    get_pool,
     get_or_create_user, get_categories, add_transaction,
     get_monthly_summary, get_recent_transactions,
     get_category_breakdown, is_premium,
@@ -279,17 +280,21 @@ async def msg_quick_input(message: Message, state: FSMContext):
     from app.database import add_transaction as _add_tx
     from datetime import datetime
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        tx = await conn.fetchrow(
-            """INSERT INTO transactions
-               (user_id, category_id, amount, type, kind, comment,
-                transaction_date, wallet, pnl_period)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
-            message.from_user.id, category_id, parsed['amount'],
-            parsed['type'], kind, parsed['comment'],
-            parsed['transaction_date'], parsed['wallet'], parsed['pnl_period']
-        )
+    from app.database import execute, fetchone
+    await execute(
+        """INSERT INTO transactions
+           (user_id, category_id, amount, type, kind, comment,
+            transaction_date, wallet, pnl_period)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (message.from_user.id, category_id, parsed['amount'],
+         parsed['type'], kind, parsed['comment'],
+         parsed['transaction_date'], parsed['wallet'], parsed['pnl_period'])
+    )
+    tx = await fetchone(
+        "SELECT id FROM transactions WHERE user_id=%s ORDER BY created_at DESC LIMIT 1",
+        (message.from_user.id,)
+    )
+    tx = {'id': tx[0]}
 
     sign = "−" if parsed['type'] == 'expense' else "+"
     wallet_names = {'cash': '💵 Нал', 'card': '💳 Безнал', 'other': '🔄 Другое'}
@@ -358,17 +363,21 @@ async def msg_quick_input(message: Message, state: FSMContext):
     from app.database import add_transaction as _add_tx
     from datetime import datetime
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        tx = await conn.fetchrow(
-            """INSERT INTO transactions
-               (user_id, category_id, amount, type, kind, comment,
-                transaction_date, wallet, pnl_period)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
-            message.from_user.id, category_id, parsed['amount'],
-            parsed['type'], kind, parsed['comment'],
-            parsed['transaction_date'], parsed['wallet'], parsed['pnl_period']
-        )
+    from app.database import execute, fetchone
+    await execute(
+        """INSERT INTO transactions
+           (user_id, category_id, amount, type, kind, comment,
+            transaction_date, wallet, pnl_period)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (message.from_user.id, category_id, parsed['amount'],
+         parsed['type'], kind, parsed['comment'],
+         parsed['transaction_date'], parsed['wallet'], parsed['pnl_period'])
+    )
+    tx = await fetchone(
+        "SELECT id FROM transactions WHERE user_id=%s ORDER BY created_at DESC LIMIT 1",
+        (message.from_user.id,)
+    )
+    tx = {'id': tx[0]}
 
     sign = "−" if parsed['type'] == 'expense' else "+"
     wallet_names = {'cash': '💵 Нал', 'card': '💳 Безнал', 'other': '🔄 Другое'}
