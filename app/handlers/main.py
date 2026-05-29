@@ -269,8 +269,16 @@ async def msg_quick_input(message: Message, state: FSMContext):
                 break
 
     if not category_id and categories:
-        category_id = categories[0]['id']
-        kind = categories[0]['kind']
+        # Ищем "Прочие расходы" или "Прочие доходы" как дефолт
+        default_name = 'Прочие расходы' if parsed["type"] == 'expense' else 'Прочие доходы'
+        for cat in categories:
+            if default_name.lower() in cat['name'].lower():
+                category_id = cat['id']
+                kind = cat['kind']
+                break
+        if not category_id:
+            category_id = categories[0]['id']
+            kind = categories[0]['kind']
 
     if not category_id:
         await message.answer("❌ Не нашёл подходящую категорию.")
