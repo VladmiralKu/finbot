@@ -89,6 +89,7 @@ async def add_transaction(user_id, category_id, amount, type_, kind, comment="",
 
 
 async def get_monthly_summary(user_id, year, month):
+    # Текущий месяц
     rows = await fetchall(
         """SELECT type, kind, SUM(amount) FROM transactions
            WHERE user_id=%s AND EXTRACT(YEAR FROM transaction_date)=%s AND EXTRACT(MONTH FROM transaction_date)=%s
@@ -105,6 +106,17 @@ async def get_monthly_summary(user_id, year, month):
             result["expense_variable"] += float(row[2])
     result["total_expense"] = result["expense_fixed"] + result["expense_variable"]
     result["balance"] = result["income"] - result["total_expense"]
+
+    # Перетекающий остаток — сумма всех транзакций до начала этого месяца
+    prev_row = await fetchone(
+        """SELECT 
+               COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE -amount END), 0)
+           FROM transactions
+           WHERE user_id=%s AND transaction_date < DATE_TRUNC('month', MAKE_DATE(%s, %s, 1))""",
+        (user_id, year, month),
+    )
+    result["carry_over"] = float(prev_row[0]) if prev_row else 0.0
+    result["closing_balance"] = result["carry_over"] + result["balance"]
     return result
 
 
