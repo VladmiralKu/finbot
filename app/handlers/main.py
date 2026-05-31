@@ -7,9 +7,8 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
 
-from app.database import execute,  (
-    get_pool,
-    get_pool,
+from app.database import (
+    execute,
     get_or_create_user, get_categories, add_transaction,
     get_monthly_summary, get_recent_transactions,
     get_category_breakdown, is_premium,
