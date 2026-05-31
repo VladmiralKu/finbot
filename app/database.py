@@ -297,3 +297,57 @@ async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int 
         "UPDATE users SET is_premium=TRUE, premium_until=%s WHERE id=%s",
         (until, user_id)
     )
+
+
+async def get_user_tier(user_id):
+    row = await fetchone(
+        "SELECT subscription_tier, premium_until FROM users WHERE id = %s",
+        (user_id,)
+    )
+    if not row:
+        return 'free'
+    tier = row[0] or 'free'
+    from datetime import datetime
+    # Если тариф платный но срок истёк — возвращаем free
+    if tier != 'free' and row[1] and row[1] < datetime.now():
+        return 'free'
+    return tier
+
+
+async def can_use_feature(user_id, feature):
+    """
+    Проверяет доступ к фиче по тарифу.
+    feature: 'calendar', 'receipt_scan', 'voice_input', 'change_categories',
+             'ai_analysis', 'annual_plan', 'pnl_table', 'dds_categories',
+             'export', 'business_tools'
+    Возвращает: True/False или число (лимит для ai_analysis)
+    """
+    tier = await get_user_tier(user_id)
+    row = await fetchone(
+        "SELECT * FROM tier_limits WHERE tier = %s", (tier,)
+    )
+    if not row:
+        return False
+
+    # Маппинг колонок
+    cols = ['tier', 'ai_analyses_per_month', 'dashboards_per_month',
+            'receipt_scans_per_month', 'excel_imports_per_month',
+            'can_change_categories', 'can_change_currency',
+            'has_calendar', 'has_pnl', 'has_business_tools',
+            'has_voice_input', 'has_annual_plan', 'has_dds_categories', 'has_export']
+    data = dict(zip(cols, row))
+
+    feature_map = {
+        'calendar': data.get('has_calendar', False),
+        'receipt_scan': data.get('receipt_scans_per_month', 0),
+        'voice_input': data.get('has_voice_input', False),
+        'change_categories': data.get('can_change_categories', False),
+        'ai_analysis': data.get('ai_analyses_per_month', 0),
+        'annual_plan': data.get('has_annual_plan', False),
+        'pnl_table': data.get('has_pnl', False),
+        'dds_categories': data.get('has_dds_categories', False),
+        'export': data.get('has_export', False),
+        'business_tools': data.get('has_business_tools', False),
+        'dashboard': data.get('dashboards_per_month', 0),
+    }
+    return feature_map.get(feature, False)
