@@ -212,13 +212,11 @@ async def cb_scan_receipt(call: CallbackQuery):
 @router.callback_query(F.data.startswith("delete_tx:"))
 async def cb_delete_tx(call: CallbackQuery):
     tx_id = int(call.data.split(":")[1])
-    from app.database import get_pool
-    pool = await get_pool()
-    await pool.execute(
-        "DELETE FROM transactions WHERE id=$1 AND user_id=$2",
-        tx_id, call.from_user.id,
+    await execute(
+        "DELETE FROM transactions WHERE id=%s AND user_id=%s",
+        (tx_id, call.from_user.id)
     )
-    await call.message.edit_text("🗑 Транзакция удалена.", reply_markup=main_menu())
+    await call.message.edit_text("Транзакция удалена.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data.startswith("confirm:"))
