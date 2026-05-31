@@ -477,3 +477,134 @@ async def cb_dashboard(call: CallbackQuery):
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
+
+
+# --- Транзакции по месяцу ---
+
+@router.callback_query(F.data.startswith("txlist:"))
+async def cb_txlist(call: CallbackQuery):
+    from app.database import get_transactions_by_month
+    _, year, month = call.data.split(":")
+    year, month = int(year), int(month)
+    txs = await get_transactions_by_month(call.from_user.id, year, month)
+
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    if not txs:
+        await call.message.edit_text(
+            f"За {MONTHS[month]} {year} транзакций нет.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад", callback_data="recent")]
+            ])
+        )
+        return
+
+    text = f"Транзакции за {MONTHS[month]} {year}\n\n"
+    for tx in txs:
+        tx_id, date, amount, type_, comment, cat_name, wallet = tx
+        sign = "-" if type_ == "expense" else "+"
+        wallet_str = {"cash": "нал", "card": "бн"}.get(wallet, "")
+        comment_str = f" | {comment}" if comment else ""
+        text += f"#{tx_id} {date.strftime('%d.%m')} {sign}{float(amount):,.0f} {cat_name or ''} {wallet_str}{comment_str}\n"
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Удалить транзакцию", callback_data="delete_by_id")],
+            [InlineKeyboardButton(text="Назад", callback_data="recent")],
+        ])
+    )
+
+
+# --- Удаление по номеру ---
+
+class DeleteTxState(StatesGroup):
+    waiting_id = State()
+
+
+@router.callback_query(F.data == "delete_by_id")
+async def cb_delete_by_id(call: CallbackQuery, state: FSMContext):
+    await state.set_state(DeleteTxState.waiting_id)
+    await call.message.edit_text(
+        "Напишите номер транзакции для удаления (например: 42):",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="recent")]
+        ])
+    )
+
+
+@router.message(DeleteTxState.waiting_id)
+async def msg_delete_tx_by_id(message: Message, state: FSMContext):
+    from app.database import delete_transaction_by_id
+    await state.clear()
+    try:
+        tx_id = int(message.text.strip().replace("#", ""))
+    except ValueError:
+        await message.answer("Введи числовой номер транзакции, например: 42")
+        return
+
+    success = await delete_transaction_by_id(message.from_user.id, tx_id)
+    if success:
+        await message.answer(
+            f"Транзакция #{tx_id} удалена.",
+            reply_markup=main_menu()
+        )
+    else:
+        await message.answer(
+            f"Транзакция #{tx_id} не найдена или не принадлежит тебе.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Попробовать снова", callback_data="delete_by_id")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+
+
+# --- Экспорт в Excel ---
+
+@router.callback_query(F.data == "export_excel")
+async def cb_export_excel(call: CallbackQuery):
+    from app.database import get_all_transactions_for_export
+    import io
+    try:
+        import openpyxl
+    except ImportError:
+        await call.answer("openpyxl не установлен", show_alert=True)
+        return
+
+    txs = await get_all_transactions_for_export(call.from_user.id)
+    if not txs:
+        await call.answer("Транзакций нет", show_alert=True)
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Транзакции"
+    ws.append(["#", "Дата", "Сумма", "Тип", "Категория", "Кошелёк", "Комментарий", "ПнЛ период"])
+
+    for tx in txs:
+        tx_id, date, amount, type_, cat, wallet, comment, pnl = tx
+        ws.append([
+            tx_id,
+            date.strftime("%d.%m.%Y"),
+            float(amount) if type_ == "income" else -float(amount),
+            "Доход" if type_ == "income" else "Расход",
+            cat or "",
+            wallet or "",
+            comment or "",
+            pnl or "",
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from aiogram.types import BufferedInputFile
+    await call.message.answer_document(
+        BufferedInputFile(buf.read(), filename="transactions.xlsx"),
+        caption="Все транзакции"
+    )
+    await call.answer()

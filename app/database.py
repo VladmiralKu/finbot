@@ -469,3 +469,45 @@ async def get_dashboard(user_id, year, month):
         result['dynamics'] = None
 
     return result
+
+
+async def get_transactions_by_month(user_id, year, month):
+    rows = await fetchall(
+        """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment,
+                  c.name as category_name, t.wallet
+           FROM transactions t
+           LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id = %s
+             AND EXTRACT(YEAR FROM t.transaction_date) = %s
+             AND EXTRACT(MONTH FROM t.transaction_date) = %s
+           ORDER BY t.transaction_date DESC, t.id DESC""",
+        (user_id, year, month)
+    )
+    return rows
+
+
+async def get_all_transactions_for_export(user_id):
+    rows = await fetchall(
+        """SELECT t.id, t.transaction_date, t.amount, t.type,
+                  c.name as category_name, t.wallet, t.comment, t.pnl_period
+           FROM transactions t
+           LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id = %s
+           ORDER BY t.transaction_date DESC, t.id DESC""",
+        (user_id,)
+    )
+    return rows
+
+
+async def delete_transaction_by_id(user_id, tx_id):
+    row = await fetchone(
+        "SELECT id FROM transactions WHERE id=%s AND user_id=%s",
+        (tx_id, user_id)
+    )
+    if not row:
+        return False
+    await execute(
+        "DELETE FROM transactions WHERE id=%s AND user_id=%s",
+        (tx_id, user_id)
+    )
+    return True
