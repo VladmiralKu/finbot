@@ -159,19 +159,27 @@ async def cb_report_month(call: CallbackQuery):
 
 @router.callback_query(F.data == "recent")
 async def cb_recent(call: CallbackQuery):
-    txs = await get_recent_transactions(call.from_user.id, limit=8)
-    if not txs:
-        await call.answer("Транзакций пока нет", show_alert=True)
-        return
-    text = "📋 <b>Последние операции:</b>\n\n"
-    for tx in txs:
-        sign = "−" if tx["type"] == "expense" else "+"
-        date = tx["transaction_date"].strftime("%d.%m")
-        text += f"{date}  {sign}{float(tx['amount']):,.0f} ₽  {tx['category_name'] or '—'}\n"
+    now = datetime.now()
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    months = []
+    for i in range(3):
+        m = now.month - i
+        y = now.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        months.append((y, m))
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")]
+        *[[InlineKeyboardButton(
+            text=f"{MONTHS[m]} {y}",
+            callback_data=f"txlist:{y}:{m}"
+        )] for y, m in months],
+        [InlineKeyboardButton(text="Выгрузить всё в Excel", callback_data="export_excel")],
+        [InlineKeyboardButton(text="Удалить транзакцию", callback_data="delete_by_id")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await call.message.edit_text("Транзакции — выбери месяц:", parse_mode=None, reply_markup=kb)
 
 
 @router.callback_query(F.data == "premium")
