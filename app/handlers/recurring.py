@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from datetime import date
 
-from app.database import get_recurring_payments, add_recurring_payment, get_categories, is_premium
+from app.database import get_recurring_payments, add_recurring_payment, get_categories, is_premium, can_use_feature
 
 router = Router()
 
@@ -21,6 +21,22 @@ class AddRecurring(StatesGroup):
 
 @router.callback_query(F.data == "calendar")
 async def cb_calendar(call: CallbackQuery):
+    if not await can_use_feature(call.from_user.id, "calendar"):
+        await call.message.edit_text(
+            "🗓 <b>Платёжный календарь</b>
+
+"
+            "Эта функция доступна с тарифа <b>Старт</b> и выше.
+
+"
+            "Используй /premium чтобы узнать о тарифах.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⭐ Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+            ])
+        )
+        return
     payments = await get_recurring_payments(call.from_user.id)
     today = date.today()
 
