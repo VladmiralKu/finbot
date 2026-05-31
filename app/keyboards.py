@@ -4,20 +4,20 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Расход", callback_data="add_expense"),
-            InlineKeyboardButton(text="Доход",  callback_data="add_income"),
+            InlineKeyboardButton(text="➕ Расход", callback_data="add_expense"),
+            InlineKeyboardButton(text="💰 Доход",  callback_data="add_income"),
         ],
         [
-            InlineKeyboardButton(text="Отчёт за месяц", callback_data="report_month"),
-            InlineKeyboardButton(text="Последние",       callback_data="recent"),
+            InlineKeyboardButton(text="📊 Отчёт за месяц", callback_data="report_month"),
+            InlineKeyboardButton(text="📋 Последние",       callback_data="recent"),
         ],
         [
-            InlineKeyboardButton(text="ИИ-анализ",   callback_data="ai_analyze"),
-            InlineKeyboardButton(text="Фото чека",   callback_data="scan_receipt"),
+            InlineKeyboardButton(text="🤖 ИИ-анализ",   callback_data="ai_analyze"),
+            InlineKeyboardButton(text="📷 Фото чека",   callback_data="scan_receipt"),
         ],
         [
-            InlineKeyboardButton(text="Календарь", callback_data="calendar"),
-            InlineKeyboardButton(text="Тарифы",    callback_data="premium"),
+            InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar"),
+            InlineKeyboardButton(text="⭐ Тарифы",    callback_data="premium"),
         ],
     ])
 
