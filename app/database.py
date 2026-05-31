@@ -351,3 +351,121 @@ async def can_use_feature(user_id, feature):
         'dashboard': data.get('dashboards_per_month', 0),
     }
     return feature_map.get(feature, False)
+
+
+async def get_dashboard(user_id, year, month):
+    """Данные для табло управленца"""
+    from datetime import date
+    import calendar
+
+    # Текущий месяц - транзакции по pnl_period
+    period = f"{year}-{month:02d}"
+
+    # Доходы и расходы по pnl_period
+    rows = await fetchall(
+        """SELECT t.type, c.kind, c.name, SUM(t.amount) as total
+           FROM transactions t
+           JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id = %s
+             AND COALESCE(t.pnl_period, TO_CHAR(t.transaction_date, 'YYYY-MM')) = %s
+           GROUP BY t.type, c.kind, c.name
+           ORDER BY t.type, c.kind, c.name""",
+        (user_id, period)
+    )
+
+    # Прошлый месяц
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    prev_period = f"{prev_year}-{prev_month:02d}"
+
+    prev_rows = await fetchall(
+        """SELECT t.type, SUM(t.amount) as total
+           FROM transactions t
+           WHERE t.user_id = %s
+             AND COALESCE(t.pnl_period, TO_CHAR(t.transaction_date, 'YYYY-MM')) = %s
+           GROUP BY t.type""",
+        (user_id, prev_period)
+    )
+
+    # Количество транзакций
+    tx_count = await fetchone(
+        """SELECT COUNT(*) FROM transactions
+           WHERE user_id = %s
+             AND EXTRACT(YEAR FROM transaction_date) = %s
+             AND EXTRACT(MONTH FROM transaction_date) = %s""",
+        (user_id, year, month)
+    )
+
+    # Ближайшие платежи из календаря
+    upcoming = await fetchall(
+        """SELECT name, amount, next_trigger_date
+           FROM recurring_payments
+           WHERE user_id = %s AND is_active = TRUE
+             AND next_trigger_date <= CURRENT_DATE + INTERVAL '7 days'
+             AND next_trigger_date >= CURRENT_DATE
+           ORDER BY next_trigger_date""",
+        (user_id,)
+    )
+
+    # Собираем результат
+    result = {
+        'period': period,
+        'income': 0.0,
+        'income_by_wallet': {},
+        'variable_expense': 0.0,
+        'fixed_expense': 0.0,
+        'depreciation': 0.0,
+        'tax': 0.0,
+        'loan_body': 0.0,
+        'loan_pct': 0.0,
+        'categories': [],
+        'prev_income': 0.0,
+        'prev_expense': 0.0,
+        'tx_count': int(tx_count[0]) if tx_count else 0,
+        'upcoming': upcoming or [],
+    }
+
+    for row in rows:
+        type_, kind, name, total = row
+        total = float(total)
+        if type_ == 'income':
+            result['income'] += total
+        elif type_ == 'expense':
+            if kind == 'fixed':
+                result['fixed_expense'] += total
+            elif kind == 'variable':
+                result['variable_expense'] += total
+            elif kind == 'depreciation':
+                result['depreciation'] += total
+            elif kind == 'tax':
+                result['tax'] += total
+            elif kind == 'loan_body':
+                result['loan_body'] += total
+            elif kind == 'loan_pct':
+                result['loan_pct'] += total
+            result['categories'].append((name, kind, total))
+
+    for row in prev_rows:
+        type_, total = row
+        if type_ == 'income':
+            result['prev_income'] = float(total)
+        else:
+            result['prev_expense'] = float(total)
+
+    # Считаем EBITDA и ЧП
+    total_expense = result['fixed_expense'] + result['variable_expense']
+    result['total_expense'] = total_expense
+    result['ebitda'] = result['income'] - total_expense
+    result['net_profit'] = result['ebitda'] - result['depreciation'] - result['tax'] - result['loan_body'] - result['loan_pct']
+    result['net_profit_pct'] = (result['net_profit'] / result['income'] * 100) if result['income'] > 0 else 0
+
+    # Динамика
+    prev_net = result['prev_income'] - result['prev_expense']
+    if prev_net != 0:
+        result['dynamics'] = ((result['net_profit'] - prev_net) / abs(prev_net) * 100)
+    else:
+        result['dynamics'] = None
+
+    return result

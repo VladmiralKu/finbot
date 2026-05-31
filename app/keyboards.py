@@ -19,6 +19,9 @@ def main_menu():
             InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar"),
             InlineKeyboardButton(text="⭐ Тарифы",    callback_data="premium"),
         ],
+        [
+            InlineKeyboardButton(text="📊 Табло управленца", callback_data="dashboard"),
+        ],
     ])
 
 

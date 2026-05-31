@@ -401,3 +401,81 @@ async def cb_confirm_delete_account(call: CallbackQuery):
         "🗑 Аккаунт удалён. Все данные стёрты.\n\n"
         "Нажми /start чтобы начать заново."
     )
+
+
+# --- Дашборд управленца ---
+
+@router.callback_query(F.data == "dashboard")
+async def cb_dashboard(call: CallbackQuery):
+    from app.database import get_dashboard, can_use_feature
+    if not await can_use_feature(call.from_user.id, 'business_tools'):
+        await call.message.edit_text(
+            "Табло управленца доступно на тарифе Business.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    now = datetime.now()
+    d = await get_dashboard(call.from_user.id, now.year, now.month)
+
+    MONTHS = {1:'Январь',2:'Февраль',3:'Март',4:'Апрель',5:'Май',6:'Июнь',
+              7:'Июль',8:'Август',9:'Сентябрь',10:'Октябрь',11:'Ноябрь',12:'Декабрь'}
+
+    # Динамика
+    if d['dynamics'] is not None:
+        dyn_icon = "📈" if d['dynamics'] >= 0 else "📉"
+        dyn_str = f"{dyn_icon} {d['dynamics']:+.1f}% vs прошлый месяц"
+    else:
+        dyn_str = "Нет данных за прошлый месяц"
+
+    # Ближайшие платежи
+    upcoming_str = ""
+    if d['upcoming']:
+        upcoming_str = "\n\nБлижайшие платежи (7 дней):\n"
+        for p in d['upcoming']:
+            upcoming_str += f"  {p[2].strftime('%d.%m')} {p[0]} — {float(p[1]):,.0f} руб.\n"
+
+    # Топ расходов
+    top_cats = sorted([c for c in d['categories'] if c[1] in ('fixed','variable')],
+                      key=lambda x: x[2], reverse=True)[:3]
+    top_str = ""
+    if top_cats:
+        top_str = "\nТоп расходов:\n"
+        for name, kind, total in top_cats:
+            pct = total / d['income'] * 100 if d['income'] > 0 else 0
+            top_str += f"  {name}: {total:,.0f} ({pct:.1f}%)\n"
+
+    text = (
+        f"Табло управленца — {MONTHS[now.month]} {now.year}\n\n"
+        f"Выручка: {d['income']:,.0f} руб.\n"
+        f"Прямые расходы: -{d['variable_expense']:,.0f} руб.\n"
+        f"Косвенные расходы: -{d['fixed_expense']:,.0f} руб.\n\n"
+        f"EBITDA: {d['ebitda']:,.0f} руб."
+    )
+
+    if d['depreciation'] > 0:
+        text += f"\n  Амортизация: -{d['depreciation']:,.0f}"
+    if d['tax'] > 0:
+        text += f"\n  Налоги: -{d['tax']:,.0f}"
+    if d['loan_body'] > 0 or d['loan_pct'] > 0:
+        text += f"\n  Кредиты: -{d['loan_body']+d['loan_pct']:,.0f}"
+
+    net_icon = "✅" if d['net_profit'] >= 0 else "🔴"
+    text += (
+        f"\n\n{net_icon} Чистая прибыль: {d['net_profit']:,.0f} руб. ({d['net_profit_pct']:.1f}%)\n"
+        f"{dyn_str}\n"
+        f"\nТранзакций: {d['tx_count']}"
+        f"{top_str}"
+        f"{upcoming_str}"
+    )
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
