@@ -616,3 +616,75 @@ async def cb_export_excel(call: CallbackQuery):
         caption="Все транзакции"
     )
     await call.answer()
+
+
+# --- ПнЛ отчёт ---
+
+@router.callback_query(F.data == "pnl_report")
+async def cb_pnl_report(call: CallbackQuery):
+    from app.database import get_pnl_report, can_use_feature
+    if not await can_use_feature(call.from_user.id, 'pnl_table'):
+        await call.message.edit_text(
+            "ПнЛ отчёт доступен на тарифе Premium и выше.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    now = datetime.now()
+    d = await get_pnl_report(call.from_user.id, now.year, now.month)
+
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    pct = d['pct']
+
+    text = f"ПнЛ — {MONTHS[now.month]} {now.year}\n\n"
+
+    # Выручка
+    text += f"ВЫРУЧКА: {d['income']:,.0f} руб.\n"
+    for name, total in d['income_cats']:
+        text += f"  {name}: {total:,.0f} ({pct(total)})\n"
+
+    # Прямые (переменные)
+    text += f"\nПРЯМЫЕ РАСХОДЫ: -{d['variable']:,.0f} ({pct(d['variable'])})\n"
+    for name, total in d['variable_cats']:
+        text += f"  {name}: -{total:,.0f} ({pct(total)})\n"
+
+    # Валовая прибыль
+    gp_icon = "+" if d['gross_profit'] >= 0 else ""
+    text += f"\nВаловая прибыль: {gp_icon}{d['gross_profit']:,.0f} ({pct(d['gross_profit'])})\n"
+
+    # Косвенные (постоянные)
+    text += f"\nКОСВЕННЫЕ РАСХОДЫ: -{d['fixed']:,.0f} ({pct(d['fixed'])})\n"
+    for name, total in d['fixed_cats']:
+        text += f"  {name}: -{total:,.0f} ({pct(total)})\n"
+
+    # EBITDA
+    eb_icon = "+" if d['ebitda'] >= 0 else ""
+    text += f"\nEBITDA: {eb_icon}{d['ebitda']:,.0f} ({pct(d['ebitda'])})\n"
+
+    # Ниже EBITDA
+    if d['depreciation'] > 0:
+        text += f"  Амортизация: -{d['depreciation']:,.0f}\n"
+    if d['tax'] > 0:
+        text += f"  Налоги: -{d['tax']:,.0f}\n"
+    if d['loan_body'] > 0:
+        text += f"  Кредит (тело): -{d['loan_body']:,.0f}\n"
+    if d['loan_pct'] > 0:
+        text += f"  Кредит (проценты): -{d['loan_pct']:,.0f}\n"
+
+    # ЧП
+    np_icon = "+" if d['net_profit'] >= 0 else ""
+    text += f"\nЧИСТАЯ ПРИБЫЛЬ: {np_icon}{d['net_profit']:,.0f} ({pct(d['net_profit'])})\n"
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )

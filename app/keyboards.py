@@ -21,6 +21,7 @@ def main_menu():
         ],
         [
             InlineKeyboardButton(text="📊 Табло управленца", callback_data="dashboard"),
+            InlineKeyboardButton(text="📈 ПнЛ отчёт", callback_data="pnl_report"),
         ],
     ])
 

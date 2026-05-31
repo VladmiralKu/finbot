@@ -511,3 +511,65 @@ async def delete_transaction_by_id(user_id, tx_id):
         (tx_id, user_id)
     )
     return True
+
+
+async def get_pnl_report(user_id, year, month):
+    """ПнЛ отчёт по методу начисления (pnl_period)"""
+    period = f"{year}-{month:02d}"
+
+    rows = await fetchall(
+        """SELECT t.type, c.kind, c.name, SUM(t.amount) as total
+           FROM transactions t
+           JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id = %s
+             AND COALESCE(t.pnl_period, TO_CHAR(t.transaction_date, 'YYYY-MM')) = %s
+           GROUP BY t.type, c.kind, c.name
+           ORDER BY t.type, c.kind, SUM(t.amount) DESC""",
+        (user_id, period)
+    )
+
+    result = {
+        'period': period,
+        'income': 0.0,
+        'income_cats': [],
+        'variable': 0.0,
+        'variable_cats': [],
+        'fixed': 0.0,
+        'fixed_cats': [],
+        'depreciation': 0.0,
+        'tax': 0.0,
+        'loan_body': 0.0,
+        'loan_pct': 0.0,
+    }
+
+    for row in rows:
+        type_, kind, name, total = row
+        total = float(total)
+        if type_ == 'income':
+            result['income'] += total
+            result['income_cats'].append((name, total))
+        elif type_ == 'expense':
+            if kind == 'variable':
+                result['variable'] += total
+                result['variable_cats'].append((name, total))
+            elif kind == 'fixed':
+                result['fixed'] += total
+                result['fixed_cats'].append((name, total))
+            elif kind == 'depreciation':
+                result['depreciation'] += total
+            elif kind == 'tax':
+                result['tax'] += total
+            elif kind == 'loan_body':
+                result['loan_body'] += total
+            elif kind == 'loan_pct':
+                result['loan_pct'] += total
+
+    result['gross_profit'] = result['income'] - result['variable']
+    result['ebitda'] = result['gross_profit'] - result['fixed']
+    result['net_profit'] = result['ebitda'] - result['depreciation'] - result['tax'] - result['loan_body'] - result['loan_pct']
+
+    def pct(val):
+        return f"{val/result['income']*100:.1f}%" if result['income'] > 0 else "—"
+
+    result['pct'] = pct
+    return result
