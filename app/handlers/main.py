@@ -2,6 +2,8 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state
+from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
 
@@ -244,7 +246,7 @@ async def cb_settings(call: CallbackQuery):
 
 # --- Быстрый ввод ---
 
-@router.message(F.text.regexp(r'^[+-]?\d+'))
+@router.message(F.text.regexp(r'^[+-]?\d+'), StateFilter(default_state))
 async def msg_quick_input(message: Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state:
