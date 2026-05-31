@@ -12,7 +12,6 @@ from app.keyboards import premium_keyboard
 
 router = Router()
 
-# Цены в Telegram Stars (XTR)
 PREMIUM_STARS = 150
 BUSINESS_STARS = 300
 
@@ -27,33 +26,62 @@ async def cb_premium(call: CallbackQuery):
 
     if tier == 'free':
         text = (
-            "⭐ <b>Выбери тариф</b>\n\n"
-            "🔹 <b>Premium — 150 ⭐/мес</b>\n"
-            "• Неограниченные транзакции\n"
-            "• 🤖 ИИ-анализ расходов\n"
-            "• 📷 Сканирование чеков\n"
-            "• 🗓 Платёжный календарь\n"
-            "• Расширенные отчёты\n\n"
-            "💼 <b>Business — 300 ⭐/мес</b>\n"
-            "• Всё из Premium\n"
-            "• Функции для бизнеса (скоро)\n\n"
-            "💡 Оплата звёздами Telegram — быстро и безопасно"
+            "Тарифы Баланс\n\n"
+            "Бесплатный (сейчас у тебя)\n"
+            "Быстрый ввод транзакций\n"
+            "Отчёт ДДС с перетекающим остатком\n"
+            "Последние транзакции\n\n"
+            "Старт — 79 руб/мес\n"
+            "Всё из бесплатного +\n"
+            "Платёжный календарь\n"
+            "Сканирование чеков (Claude Vision)\n\n"
+            "Premium — 350 руб/мес\n"
+            "Всё из Старт +\n"
+            "Голосовой ввод\n"
+            "Смена категорий\n"
+            "ИИ-анализ (20 генераций/мес)\n"
+            "Финансовый план на год\n"
+            "ПнЛ таблица (кассовый метод)\n"
+            "ДДС свод по категориям\n\n"
+            "Business — 1490 руб/мес\n"
+            "Всё из Premium +\n"
+            "ИИ-анализ (40 генераций/мес)\n"
+            "Табло управленца (KPI)\n"
+            "Выгрузка в Excel и PDF\n"
+            "Excel-импорт\n"
+            "Зарплатная ведомость\n"
+            "Бизнес-отчёты (БДР)\n\n"
+            "Оплата звёздами Telegram"
+        )
+    elif tier == 'start':
+        text = (
+            "У тебя активен тариф Старт!\n\n"
+            "Доступно:\n"
+            "Быстрый ввод, отчёт ДДС, календарь, сканирование чеков\n\n"
+            "Upgrade до Premium или Business?"
         )
     elif tier == 'premium':
-        text = "⭐ <b>У тебя активен Premium!</b>\n\nХочешь upgrade до Business?"
+        text = (
+            "У тебя активен Premium!\n\n"
+            "Доступно:\n"
+            "Всё из Старт + ИИ-анализ, голосовой ввод, ПнЛ, ДДС по категориям\n\n"
+            "Upgrade до Business?"
+        )
     else:
-        text = "💼 <b>У тебя активен Premium Business!</b>"
+        text = (
+            "У тебя активен Premium Business!\n\n"
+            "Доступны все функции бота.\n"
+            "Спасибо за поддержку!"
+        )
 
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=premium_keyboard(tier))
+    await call.message.edit_text(text, parse_mode=None, reply_markup=premium_keyboard(tier))
 
-
-# --- Оплата Stars ---
 
 @router.callback_query(F.data == "buy_stars_premium")
 async def cb_buy_premium(call: CallbackQuery):
     await call.message.answer_invoice(
         title="Premium подписка",
-        description="30 дней Premium: ИИ-анализ, сканирование чеков, календарь платежей",
+        description="30 дней Premium: ИИ-анализ, голосовой ввод, ПнЛ таблица, ДДС по категориям",
         payload="premium_30",
         currency="XTR",
         prices=[LabeledPrice(label="Premium 30 дней", amount=PREMIUM_STARS)],
@@ -65,7 +93,7 @@ async def cb_buy_premium(call: CallbackQuery):
 async def cb_buy_business(call: CallbackQuery):
     await call.message.answer_invoice(
         title="Premium Business",
-        description="30 дней Premium Business — всё включено + бизнес-функции",
+        description="30 дней Business: всё включено + табло управленца, выгрузка PDF/Excel, БДР",
         payload="business_30",
         currency="XTR",
         prices=[LabeledPrice(label="Business 30 дней", amount=BUSINESS_STARS)],
@@ -83,26 +111,23 @@ async def successful_payment(message: Message):
     payload = message.successful_payment.invoice_payload
     tier = "business" if "business" in payload else "premium"
     await activate_stars_payment(message.from_user.id, tier=tier, days=30)
+    tier_name = "Business" if tier == "business" else "Premium"
     await message.answer(
-        f"✅ <b>Оплата прошла!</b>\n\n"
-        f"{'💼 Premium Business' if tier == 'business' else '⭐ Premium'} активирован на 30 дней.\n\n"
-        f"Спасибо! Enjoy 🚀",
-        parse_mode="HTML",
+        f"Оплата прошла! {tier_name} активирован на 30 дней. Спасибо!",
+        parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")]
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
         ])
     )
 
-
-# --- Промокоды ---
 
 @router.callback_query(F.data == "enter_promo")
 async def cb_enter_promo(call: CallbackQuery, state: FSMContext):
     await state.set_state(PromoState.waiting_code)
     await call.message.edit_text(
-        "🎟 Введи промокод:",
+        "Введи промокод:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Отмена", callback_data="premium")]
+            [InlineKeyboardButton(text="Отмена", callback_data="premium")]
         ])
     )
 
@@ -115,38 +140,35 @@ async def msg_promo_code(message: Message, state: FSMContext):
 
     if not promo:
         await message.answer(
-            "❌ Промокод не найден. Проверь правильность ввода.",
+            "Промокод не найден. Проверь правильность ввода.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎟 Попробовать снова", callback_data="enter_promo")],
-                [InlineKeyboardButton(text="◀️ Назад", callback_data="premium")],
+                [InlineKeyboardButton(text="Попробовать снова", callback_data="enter_promo")],
+                [InlineKeyboardButton(text="Назад", callback_data="premium")],
             ])
         )
         return
 
     promo_id, _, tier, days, max_uses, used_count, expires_at = promo
 
-    # Проверка лимита
     if used_count >= max_uses:
-        await message.answer("❌ Промокод уже использован максимальное количество раз.")
+        await message.answer("Промокод уже использован максимальное количество раз.")
         return
 
-    # Проверка срока
     if expires_at:
         from datetime import datetime
         if datetime.now() > expires_at:
-            await message.answer("❌ Срок действия промокода истёк.")
+            await message.answer("Срок действия промокода истёк.")
             return
 
     success = await use_promo(message.from_user.id, promo_id, tier, days)
     if success:
-        tier_name = "💼 Premium Business" if tier == "business" else "⭐ Premium"
+        tier_name = "Business" if tier == "business" else "Premium"
         await message.answer(
-            f"✅ <b>Промокод активирован!</b>\n\n"
-            f"{tier_name} на {days} дней — активирован!\n\nПриятного пользования 🚀",
-            parse_mode="HTML",
+            f"Промокод активирован! {tier_name} на {days} дней — готово!",
+            parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")]
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
             ])
         )
     else:
-        await message.answer("❌ Ты уже использовал этот промокод.")
+        await message.answer("Ты уже использовал этот промокод.")
