@@ -650,16 +650,16 @@ async def cb_pnl_report(call: CallbackQuery):
         text += f"  {name}: {total:,.0f} ({pct(total)})\n"
 
     # Прямые (переменные)
-    text += f"\nПРЯМЫЕ РАСХОДЫ: -{d['variable']:,.0f} ({pct(d['variable'])})\n"
+    text += f"\nПЕРЕМЕННЫЕ РАСХОДЫ: -{d['variable']:,.0f} ({pct(d['variable'])})\n"
     for name, total in d['variable_cats']:
         text += f"  {name}: -{total:,.0f} ({pct(total)})\n"
 
     # Валовая прибыль
     gp_icon = "+" if d['gross_profit'] >= 0 else ""
-    text += f"\nВаловая прибыль: {gp_icon}{d['gross_profit']:,.0f} ({pct(d['gross_profit'])})\n"
+    text += f"\nМаржинальная прибыль: {gp_icon}{d['gross_profit']:,.0f} ({pct(d['gross_profit'])})\n"
 
     # Косвенные (постоянные)
-    text += f"\nКОСВЕННЫЕ РАСХОДЫ: -{d['fixed']:,.0f} ({pct(d['fixed'])})\n"
+    text += f"\nПОСТОЯННЫЕ РАСХОДЫ: -{d['fixed']:,.0f} ({pct(d['fixed'])})\n"
     for name, total in d['fixed_cats']:
         text += f"  {name}: -{total:,.0f} ({pct(total)})\n"
 
