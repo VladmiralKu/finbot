@@ -7,7 +7,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
 
-from app.database import (
+from app.database import execute,  (
     get_pool,
     get_pool,
     get_or_create_user, get_categories, add_transaction,
@@ -270,6 +270,15 @@ async def msg_quick_input(message: Message, state: FSMContext):
                 kind = cat['kind']
                 break
 
+    # Если знак не указан явно и нашли расходную категорию — меняем тип на расход
+    if not parsed.get('sign_explicit', True) and parsed['category_hint']:
+        for cat in categories:
+            if parsed['category_hint'].lower() in cat['name'].lower():
+                if cat['type'] == 'expense':
+                    parsed['type'] = 'expense'
+                    categories = await get_categories(message.from_user.id, type_='expense')
+                break
+
     if not category_id and categories:
         # Ищем "Прочие расходы" или "Прочие доходы" как дефолт
         default_name = 'Прочие расходы' if parsed["type"] == 'expense' else 'Прочие доходы'
@@ -322,4 +331,74 @@ async def msg_quick_input(message: Message, state: FSMContext):
             ],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ])
+    )
+
+
+# --- /reset и /deleteaccount ---
+
+@router.message(Command("reset"))
+async def cmd_reset(message: Message):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    await message.answer(
+        "⚠️ <b>Сброс данных</b>\n\n"
+        "Это удалит все твои транзакции и регулярные платежи.\n"
+        "Категории и настройки сохранятся.\n\n"
+        "Ты уверен?",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, удалить данные", callback_data="confirm_reset"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu"),
+            ]
+        ])
+    )
+
+
+@router.message(Command("deleteaccount"))
+async def cmd_delete_account(message: Message):
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    await message.answer(
+        "🗑 <b>Удаление аккаунта</b>\n\n"
+        "Это удалит ВСЕ твои данные без возможности восстановления:\n"
+        "транзакции, категории, настройки, подписку.\n\n"
+        "При следующем /start ты начнёшь заново.\n\n"
+        "Ты уверен?",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, удалить аккаунт", callback_data="confirm_delete_account"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="main_menu"),
+            ]
+        ])
+    )
+
+
+@router.callback_query(F.data == "confirm_reset")
+async def cb_confirm_reset(call: CallbackQuery):
+    await execute(
+        "DELETE FROM transactions WHERE user_id=%s",
+        (call.from_user.id,)
+    )
+    await execute(
+        "DELETE FROM recurring_payments WHERE user_id=%s",
+        (call.from_user.id,)
+    )
+    await call.message.edit_text(
+        "✅ Все транзакции и регулярные платежи удалены.\n\n"
+        "Можешь начинать заново!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")]
+        ])
+    )
+
+
+@router.callback_query(F.data == "confirm_delete_account")
+async def cb_confirm_delete_account(call: CallbackQuery):
+    await execute(
+        "DELETE FROM users WHERE id=%s",
+        (call.from_user.id,)
+    )
+    await call.message.edit_text(
+        "🗑 Аккаунт удалён. Все данные стёрты.\n\n"
+        "Нажми /start чтобы начать заново."
     )

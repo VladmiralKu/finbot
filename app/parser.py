@@ -132,4 +132,5 @@ def parse_quick_input(text: str) -> dict:
     comment_words = [words[i] for i in range(len(words)) if i not in used_words]
     result['comment'] = ' '.join(comment_words).strip()
 
+    # Если категория не найдена явно — оставляем None, БД подберёт первую
     return result
