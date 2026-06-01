@@ -168,7 +168,7 @@ async def cb_report_by_month(call: CallbackQuery):
     closing_icon = "✅" if closing >= 0 else "🔴"
 
     text = (
-        f"Отчёт ДДС — {MONTHS[month]} {year}
+        f"Отчет ДДС - {MONTHS[month]} {year}
 
 "
         f"Входящий остаток: {carry_str} руб.
