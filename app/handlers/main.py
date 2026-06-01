@@ -168,23 +168,14 @@ async def cb_report_by_month(call: CallbackQuery):
     closing_icon = "✅" if closing >= 0 else "🔴"
 
     text = (
-        f"Отчет ДДС - {MONTHS[month]} {year}
-
-"
-        f"Входящий остаток: {carry_str} руб.
-
-"
-        f"Доходы: {summary['income']:,.0f} руб.
-"
-        f"Расходы: -{summary['total_expense']:,.0f} руб.
-"
-        f"  Постоянные: {summary['expense_fixed']:,.0f} ({pct_fixed:.0f}%)
-"
-        f"  Переменные: {summary['expense_variable']:,.0f} ({pct_var:.0f}%)
-
-"
-        f"{closing_icon} Остаток на конец: {closing:,.0f} руб.
-"
+        "Otchet DDS - "
+        + MONTHS[month] + " " + str(year) + "\n\n"
+        + "Vkhodyashchiy ostatok: " + carry_str + " rub.\n\n"
+        + "Dokhody: " + f"{summary['income']:,.0f}" + " rub.\n"
+        + "Raskhody: -" + f"{summary['total_expense']:,.0f}" + " rub.\n"
+        + "  Postoyannye: " + f"{summary['expense_fixed']:,.0f}" + f" ({pct_fixed:.0f}%)\n"
+        + "  Peremennye: " + f"{summary['expense_variable']:,.0f}" + f" ({pct_var:.0f}%)\n\n"
+        + closing_icon + " Ostatok na konets: " + f"{closing:,.0f}" + " rub.\n"
     )
     if breakdown:
         text += "
