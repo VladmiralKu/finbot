@@ -240,3 +240,139 @@ async def msg_note_search(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
+
+
+@router.callback_query(F.data.startswith("dash:"))
+async def cb_dash_by_month(call: CallbackQuery):
+    from app.database import get_dashboard, can_use_feature
+    if not await can_use_feature(call.from_user.id, 'business_tools'):
+        await call.message.edit_text(
+            "Табло управленца доступно на тарифе Business.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    parts = call.data.split(":")
+    year, month = int(parts[1]), int(parts[2])
+    d = await get_dashboard(call.from_user.id, year, month)
+
+    if d['dynamics'] is not None:
+        dyn_icon = "+" if d['dynamics'] >= 0 else ""
+        dyn_str = dyn_icon + str(round(d['dynamics'], 1)) + "% vs прошлый месяц"
+    else:
+        dyn_str = "Нет данных за прошлый месяц"
+
+    top_cats = sorted([c for c in d['categories'] if c[1] in ('fixed','variable')],
+                      key=lambda x: x[2], reverse=True)[:3]
+    top_str = ""
+    if top_cats:
+        top_str = "\nТоп расходов:\n"
+        for name, kind, total in top_cats:
+            pct = total / d['income'] * 100 if d['income'] > 0 else 0
+            top_str += "  " + name + ": " + "{:,.0f}".format(total) + " (" + str(round(pct,1)) + "%)\n"
+
+    upcoming_str = ""
+    if d['upcoming']:
+        upcoming_str = "\nБлижайшие платежи (7 дней):\n"
+        for p in d['upcoming']:
+            upcoming_str += "  " + p[2].strftime('%d.%m') + " " + p[0] + " — " + "{:,.0f}".format(float(p[1])) + " руб.\n"
+
+    net_icon = "✅" if d['net_profit'] >= 0 else "🔴"
+    text = (
+        "Табло управленца — " + MONTHS_RU[month] + " " + str(year) + "\n\n"
+        + "Выручка: " + "{:,.0f}".format(d['income']) + " руб.\n"
+        + "Переменные расходы: -" + "{:,.0f}".format(d['variable_expense']) + " руб.\n"
+        + "Постоянные расходы: -" + "{:,.0f}".format(d['fixed_expense']) + " руб.\n\n"
+        + "EBITDA: " + "{:,.0f}".format(d['ebitda']) + " руб.\n"
+    )
+    if d['depreciation'] > 0:
+        text += "  Амортизация: -" + "{:,.0f}".format(d['depreciation']) + "\n"
+    if d['tax'] > 0:
+        text += "  Налоги: -" + "{:,.0f}".format(d['tax']) + "\n"
+    if d['loan_body'] > 0 or d['loan_pct'] > 0:
+        text += "  Кредиты: -" + "{:,.0f}".format(d['loan_body']+d['loan_pct']) + "\n"
+
+    text += (
+        "\n" + net_icon + " Чистая прибыль: " + "{:,.0f}".format(d['net_profit'])
+        + " руб. (" + str(round(d['net_profit_pct'], 1)) + "%)\n"
+        + dyn_str + "\n"
+        + "\nТранзакций: " + str(d['tx_count'])
+        + top_str + upcoming_str
+    )
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Назад", callback_data="dash_menu")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
+
+
+@router.callback_query(F.data.startswith("pnl:"))
+async def cb_pnl_by_month(call: CallbackQuery):
+    from app.database import get_pnl_report, can_use_feature
+    if not await can_use_feature(call.from_user.id, 'pnl_table'):
+        await call.message.edit_text(
+            "ПнЛ отчёт доступен на тарифе Premium и выше.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    parts = call.data.split(":")
+    year, month = int(parts[1]), int(parts[2])
+    d = await get_pnl_report(call.from_user.id, year, month)
+
+    def pct(val):
+        if d['income'] > 0:
+            return str(round(val / d['income'] * 100, 1)) + "%"
+        return "—"
+
+    text = "ПнЛ — " + MONTHS_RU[month] + " " + str(year) + "\n\n"
+    text += "ВЫРУЧКА: " + "{:,.0f}".format(d['income']) + " руб.\n"
+    for name, total in d['income_cats']:
+        text += "  " + name + ": " + "{:,.0f}".format(total) + " (" + pct(total) + ")\n"
+
+    text += "\nПЕРЕМЕННЫЕ РАСХОДЫ: -" + "{:,.0f}".format(d['variable']) + " (" + pct(d['variable']) + ")\n"
+    for name, total in d['variable_cats']:
+        text += "  " + name + ": -" + "{:,.0f}".format(total) + " (" + pct(total) + ")\n"
+
+    gp_sign = "+" if d['gross_profit'] >= 0 else ""
+    text += "\nМаржинальная прибыль: " + gp_sign + "{:,.0f}".format(d['gross_profit']) + " (" + pct(d['gross_profit']) + ")\n"
+
+    text += "\nПОСТОЯННЫЕ РАСХОДЫ: -" + "{:,.0f}".format(d['fixed']) + " (" + pct(d['fixed']) + ")\n"
+    for name, total in d['fixed_cats']:
+        text += "  " + name + ": -" + "{:,.0f}".format(total) + " (" + pct(total) + ")\n"
+
+    eb_sign = "+" if d['ebitda'] >= 0 else ""
+    text += "\nEBITDA: " + eb_sign + "{:,.0f}".format(d['ebitda']) + " (" + pct(d['ebitda']) + ")\n"
+
+    if d['depreciation'] > 0:
+        text += "  Амортизация: -" + "{:,.0f}".format(d['depreciation']) + "\n"
+    if d['tax'] > 0:
+        text += "  Налоги: -" + "{:,.0f}".format(d['tax']) + "\n"
+    if d['loan_body'] > 0:
+        text += "  Кредит (тело): -" + "{:,.0f}".format(d['loan_body']) + "\n"
+    if d['loan_pct'] > 0:
+        text += "  Кредит (проценты): -" + "{:,.0f}".format(d['loan_pct']) + "\n"
+
+    np_sign = "+" if d['net_profit'] >= 0 else ""
+    text += "\nЧИСТАЯ ПРИБЫЛЬ: " + np_sign + "{:,.0f}".format(d['net_profit']) + " (" + pct(d['net_profit']) + ")\n"
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Назад", callback_data="pnl_menu")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
