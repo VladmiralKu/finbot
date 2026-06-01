@@ -20,8 +20,7 @@ def main_menu():
             InlineKeyboardButton(text="⭐ Тарифы",    callback_data="premium"),
         ],
         [
-            InlineKeyboardButton(text="📊 Табло управленца", callback_data="dashboard"),
-            InlineKeyboardButton(text="📈 ПнЛ отчёт", callback_data="pnl_report"),
+            InlineKeyboardButton(text="💼 Бизнес", callback_data="business_tools"),
         ],
     ])
 
