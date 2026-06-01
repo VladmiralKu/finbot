@@ -7,9 +7,9 @@ from datetime import datetime
 router = Router()
 
 MONTHS_RU = {
-    1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel",
-    5: "Mai", 6: "Iyun", 7: "Iyul", 8: "Avgust",
-    9: "Sentyabr", 10: "Oktyabr", 11: "Noyabr", 12: "Dekabr"
+    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+    5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
+    9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"
 }
 
 
@@ -19,17 +19,17 @@ class NoteState(StatesGroup):
 
 def business_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Tablo upravlentsa", callback_data="dash_menu")],
-        [InlineKeyboardButton(text="PnL otchet", callback_data="pnl_menu")],
-        [InlineKeyboardButton(text="Zametki", callback_data="notes_menu")],
-        [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+        [InlineKeyboardButton(text="Табло управленца", callback_data="dash_menu")],
+        [InlineKeyboardButton(text="ПнЛ отчёт", callback_data="pnl_menu")],
+        [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
 
 
 @router.callback_query(F.data == "business_tools")
 async def cb_business_tools(call: CallbackQuery):
     await call.message.edit_text(
-        "Biznes instrumenty:",
+        "Бизнес инструменты:",
         parse_mode=None,
         reply_markup=business_menu_kb()
     )
@@ -53,10 +53,10 @@ async def cb_dash_menu(call: CallbackQuery):
             text=MONTHS_RU[m] + " " + str(y),
             callback_data="dash:" + str(y) + ":" + str(m)
         )] for y, m in months],
-        [InlineKeyboardButton(text="Vygruzit za god v Excel", callback_data="dashboard_export_year")],
-        [InlineKeyboardButton(text="Nazad", callback_data="business_tools")],
+        [InlineKeyboardButton(text="Выгрузить за год в Excel", callback_data="dashboard_export_year")],
+        [InlineKeyboardButton(text="Назад", callback_data="business_tools")],
     ])
-    await call.message.edit_text("Tablo upravlentsa - vyberi mesyats:", parse_mode=None, reply_markup=kb)
+    await call.message.edit_text("Табло управленца - выбери месяц:", parse_mode=None, reply_markup=kb)
 
 
 # --- PnL menu ---
@@ -71,17 +71,17 @@ async def cb_pnl_menu(call: CallbackQuery):
         py -= 1
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="Tekushchiy - " + MONTHS_RU[now.month] + " " + str(now.year),
+            text="Текущий - " + MONTHS_RU[now.month] + " " + str(now.year),
             callback_data="pnl:" + str(now.year) + ":" + str(now.month)
         )],
         [InlineKeyboardButton(
-            text="Proshlyy - " + MONTHS_RU[pm] + " " + str(py),
+            text="Прошлый - " + MONTHS_RU[pm] + " " + str(py),
             callback_data="pnl:" + str(py) + ":" + str(pm)
         )],
-        [InlineKeyboardButton(text="Vygruzit za god v Excel", callback_data="pnl_export_year")],
-        [InlineKeyboardButton(text="Nazad", callback_data="business_tools")],
+        [InlineKeyboardButton(text="Выгрузить за год в Excel", callback_data="pnl_export_year")],
+        [InlineKeyboardButton(text="Назад", callback_data="business_tools")],
     ])
-    await call.message.edit_text("PnL otchet - vyberi period:", parse_mode=None, reply_markup=kb)
+    await call.message.edit_text("ПнЛ отчёт - выбери период:", parse_mode=None, reply_markup=kb)
 
 
 # --- Notes ---
@@ -89,21 +89,21 @@ async def cb_pnl_menu(call: CallbackQuery):
 @router.callback_query(F.data == "notes_menu")
 async def cb_notes_menu(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Zapisat mysli", callback_data="note_add")],
-        [InlineKeyboardButton(text="Starye zametki", callback_data="notes_list:0")],
-        [InlineKeyboardButton(text="Nazad", callback_data="business_tools")],
+        [InlineKeyboardButton(text="Записать мысль", callback_data="note_add")],
+        [InlineKeyboardButton(text="Старые заметки", callback_data="notes_list:0")],
+        [InlineKeyboardButton(text="Назад", callback_data="business_tools")],
     ])
-    await call.message.edit_text("Zametki:", parse_mode=None, reply_markup=kb)
+    await call.message.edit_text("Заметки:", parse_mode=None, reply_markup=kb)
 
 
 @router.callback_query(F.data == "note_add")
 async def cb_note_add(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteState.waiting_text)
     await call.message.edit_text(
-        "Napishi ili nadiktuy svoyu mysl:",
+        "Напиши или надиктуй свою мысль:",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Otmena", callback_data="notes_menu")]
+            [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
         ])
     )
 
@@ -114,17 +114,17 @@ async def msg_note_text(message: Message, state: FSMContext):
     await state.clear()
     text = message.text or ""
     if not text:
-        await message.answer("Tekst ne poluchem, poprobuy eshche raz.")
+        await message.answer("Текст не получен, попробуй ещё раз.")
         return
     await execute(
         "INSERT INTO notes (user_id, text) VALUES (%s, %s)",
         (message.from_user.id, text)
     )
     await message.answer(
-        "Zametka sohranena!",
+        "Заметка сохранена!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Zametki", callback_data="notes_menu")],
-            [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+            [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
 
@@ -138,10 +138,10 @@ async def msg_note_voice(message: Message, state: FSMContext):
         (message.from_user.id, "[Golosovaya zametka - " + message.date.strftime("%d.%m.%Y %H:%M") + "]")
     )
     await message.answer(
-        "Golosovaya zametka sohranena! (rasshifrovka budet dostupna v Premium)",
+        "Голосовая заметка сохранена! (расшифровка будет доступна в Premium)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Zametki", callback_data="notes_menu")],
-            [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+            [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
 
@@ -161,7 +161,7 @@ async def cb_notes_list(call: CallbackQuery):
         await call.message.edit_text(
             "Zametok poka net.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Nazad", callback_data="notes_menu")]
+                [InlineKeyboardButton(text="Назад", callback_data="notes_menu")]
             ])
         )
         return
@@ -178,14 +178,14 @@ async def cb_notes_list(call: CallbackQuery):
 
     buttons = []
     if offset > 0:
-        buttons.append(InlineKeyboardButton(text="< Nazad", callback_data="notes_list:" + str(offset - limit)))
+        buttons.append(InlineKeyboardButton(text="< Назад", callback_data="notes_list:" + str(offset - limit)))
     if has_more:
-        buttons.append(InlineKeyboardButton(text="Eshche >", callback_data="notes_list:" + str(offset + limit)))
+        buttons.append(InlineKeyboardButton(text="Ещё >", callback_data="notes_list:" + str(offset + limit)))
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         buttons if buttons else [],
-        [InlineKeyboardButton(text="Naiti po nomeru", callback_data="note_search")],
-        [InlineKeyboardButton(text="Nazad", callback_data="notes_menu")],
+        [InlineKeyboardButton(text="Найти по номеру", callback_data="note_search")],
+        [InlineKeyboardButton(text="Назад", callback_data="notes_menu")],
     ])
     await call.message.edit_text(text, parse_mode=None, reply_markup=kb)
 
@@ -198,10 +198,10 @@ class NoteSearchState(StatesGroup):
 async def cb_note_search(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteSearchState.waiting_id)
     await call.message.edit_text(
-        "Vvedi nomer zametki (naprimer: 42):",
+        "Введи номер заметки (например: 42):",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Otmena", callback_data="notes_menu")]
+            [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
         ])
     )
 
@@ -213,7 +213,7 @@ async def msg_note_search(message: Message, state: FSMContext):
     try:
         note_id = int(message.text.strip().replace("#", ""))
     except ValueError:
-        await message.answer("Vvedi chislovoy nomer zametki.")
+        await message.answer("Введи числовой номер заметки.")
         return
 
     row = await fetchone(
@@ -225,7 +225,7 @@ async def msg_note_search(message: Message, state: FSMContext):
         await message.answer(
             "Zametka #" + str(note_id) + " ne naydena.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Zametki", callback_data="notes_menu")]
+                [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")]
             ])
         )
         return
@@ -236,7 +236,7 @@ async def msg_note_search(message: Message, state: FSMContext):
         "#" + str(note_id) + " [" + date_str + "]\n\n" + text,
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Zametki", callback_data="notes_menu")],
-            [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+            [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )

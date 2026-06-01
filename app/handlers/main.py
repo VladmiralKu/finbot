@@ -147,9 +147,9 @@ async def cb_report_month(call: CallbackQuery):
             text=MONTHS_RU[m] + " " + str(y),
             callback_data="report:" + str(y) + ":" + str(m)
         )] for y, m in months],
-        [InlineKeyboardButton(text="Menu", callback_data="main_menu")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
-    await call.message.edit_text("Otchet DDS - vyberi mesyats:", parse_mode=None, reply_markup=kb)
+    await call.message.edit_text("Отчёт ДДС - выбери месяц:", parse_mode=None, reply_markup=kb)
     return
 
 
