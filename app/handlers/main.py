@@ -130,9 +130,37 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
 @router.callback_query(F.data == "report_month")
 async def cb_report_month(call: CallbackQuery):
     now = datetime.now()
-    summary = await get_monthly_summary(call.from_user.id, now.year, now.month)
-    breakdown = await get_category_breakdown(call.from_user.id, now.year, now.month)
-    month_name = now.strftime("%B %Y")
+    MN = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
+          7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+    MONTHS_RU = {1:"Yanvar",2:"Fevral",3:"Mart",4:"Aprel",5:"Mai",6:"Iyun",
+                 7:"Iyul",8:"Avgust",9:"Sentyabr",10:"Oktyabr",11:"Noyabr",12:"Dekabr"}
+    months = []
+    for i in range(3):
+        m = now.month - i
+        y = now.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        months.append((y, m))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[InlineKeyboardButton(
+            text=MONTHS_RU[m] + " " + str(y),
+            callback_data="report:" + str(y) + ":" + str(m)
+        )] for y, m in months],
+        [InlineKeyboardButton(text="Menu", callback_data="main_menu")],
+    ])
+    await call.message.edit_text("Otchet DDS - vyberi mesyats:", parse_mode=None, reply_markup=kb)
+    return
+
+
+@router.callback_query(F.data.startswith("report:"))
+async def cb_report_by_month(call: CallbackQuery):
+    parts = call.data.split(":")
+    year, month = int(parts[1]), int(parts[2])
+    now = type("obj", (object,), {"year": year, "month": month})()
+    summary = await get_monthly_summary(call.from_user.id, year, month)
+    breakdown = await get_category_breakdown(call.from_user.id, year, month)
+    month_name = str(year) + "-" + str(month).zfill(2)
     text = (
         f"📊 <b>Отчёт за {month_name}</b>\n\n"
         f"💰 Доходы:             <b>{summary['income']:,.0f} ₽</b>\n"
