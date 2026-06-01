@@ -130,31 +130,76 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
 @router.callback_query(F.data == "report_month")
 async def cb_report_month(call: CallbackQuery):
     now = datetime.now()
-    summary = await get_monthly_summary(call.from_user.id, now.year, now.month)
-    breakdown = await get_category_breakdown(call.from_user.id, now.year, now.month)
-    month_name = now.strftime("%B %Y")
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    months = []
+    for i in range(3):
+        m = now.month - i
+        y = now.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        months.append((y, m))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[InlineKeyboardButton(
+            text=f"{MONTHS[m]} {y}",
+            callback_data=f"report:{y}:{m}"
+        )] for y, m in months],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+    ])
+    await call.message.edit_text("Отчёт ДДС — выбери месяц:", parse_mode=None, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("report:"))
+async def cb_report_by_month(call: CallbackQuery):
+    _, year, month = call.data.split(":")
+    year, month = int(year), int(month)
+    summary = await get_monthly_summary(call.from_user.id, year, month)
+    breakdown = await get_category_breakdown(call.from_user.id, year, month)
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    carry = summary.get("carry_over", 0.0)
+    closing = summary.get("closing_balance", summary["balance"])
+    total_exp = summary["total_expense"]
+    pct_fixed = (summary["expense_fixed"] / total_exp * 100) if total_exp > 0 else 0
+    pct_var = (summary["expense_variable"] / total_exp * 100) if total_exp > 0 else 0
+    carry_str = f"+{carry:,.0f}" if carry >= 0 else f"{carry:,.0f}"
+    closing_icon = "✅" if closing >= 0 else "🔴"
+
     text = (
-        f"📊 <b>Отчёт за {month_name}</b>\n\n"
-        f"💰 Доходы:             <b>{summary['income']:,.0f} ₽</b>\n"
-        f"🔒 Постоянные расходы: <b>{summary['expense_fixed']:,.0f} ₽</b>\n"
-        f"🛒 Переменные расходы: <b>{summary['expense_variable']:,.0f} ₽</b>\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"{'✅' if summary['balance'] >= 0 else '🔴'} Остаток: "
-        f"<b>{summary['balance']:+,.0f} ₽</b>\n\n"
+        f"Отчёт ДДС — {MONTHS[month]} {year}
+
+"
+        f"Входящий остаток: {carry_str} руб.
+
+"
+        f"Доходы: {summary['income']:,.0f} руб.
+"
+        f"Расходы: -{summary['total_expense']:,.0f} руб.
+"
+        f"  Постоянные: {summary['expense_fixed']:,.0f} ({pct_fixed:.0f}%)
+"
+        f"  Переменные: {summary['expense_variable']:,.0f} ({pct_var:.0f}%)
+
+"
+        f"{closing_icon} Остаток на конец: {closing:,.0f} руб.
+"
     )
     if breakdown:
-        text += "📋 <b>Топ расходов:</b>\n"
+        text += "
+Топ расходов:
+"
         for row in breakdown[:6]:
-            icon = "🔒" if row["kind"] == "fixed" else "🛒"
-            text += f"  {icon} {row['name']}: {float(row['total']):,.0f} ₽\n"
-    prem = await is_premium(call.from_user.id)
-    if not prem:
-        text += "\n⭐ <i>ИИ-анализ доступен в Premium</i>"
+            icon = "📌" if row["kind"] == "fixed" else "🛒"
+            text += f"  {icon} {row['name']}: {float(row['total']):,.0f}
+"
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 ИИ-анализ ⭐", callback_data="ai_analyze")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+        [InlineKeyboardButton(text="Назад", callback_data="report_month")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    await call.message.edit_text(text, parse_mode=None, reply_markup=kb)
 
 
 @router.callback_query(F.data == "recent")
@@ -622,6 +667,26 @@ async def cb_export_excel(call: CallbackQuery):
 
 @router.callback_query(F.data == "pnl_report")
 async def cb_pnl_report(call: CallbackQuery):
+    now = datetime.now()
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    # Прошлый месяц
+    pm = now.month - 1
+    py = now.year
+    if pm <= 0:
+        pm += 12
+        py -= 1
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Текущий — {MONTHS[now.month]} {now.year}", callback_data=f"pnl:{now.year}:{now.month}")],
+        [InlineKeyboardButton(text=f"Прошлый — {MONTHS[pm]} {py}", callback_data=f"pnl:{py}:{pm}")],
+        [InlineKeyboardButton(text="Выгрузить за год в Excel", callback_data="pnl_export_year")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+    ])
+    await call.message.edit_text("ПнЛ отчёт — выбери период:", parse_mode=None, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("pnl:"))
+async def cb_pnl_by_month(call: CallbackQuery):
     from app.database import get_pnl_report, can_use_feature
     if not await can_use_feature(call.from_user.id, 'pnl_table'):
         await call.message.edit_text(
@@ -634,15 +699,16 @@ async def cb_pnl_report(call: CallbackQuery):
         )
         return
 
-    now = datetime.now()
-    d = await get_pnl_report(call.from_user.id, now.year, now.month)
+    _, year, month = call.data.split(":")
+    year, month = int(year), int(month)
+    d = await get_pnl_report(call.from_user.id, year, month)
 
     MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
               7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
 
     pct = d['pct']
 
-    text = f"ПнЛ — {MONTHS[now.month]} {now.year}\n\n"
+    text = f"ПнЛ — {MONTHS[month]} {year}\n\n"
 
     # Выручка
     text += f"ВЫРУЧКА: {d['income']:,.0f} руб.\n"
@@ -687,4 +753,494 @@ async def cb_pnl_report(call: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
+    )
+
+
+# --- Экспорт ПнЛ за год ---
+
+class PnlExportState(StatesGroup):
+    waiting_year = State()
+
+
+class DashboardExportState(StatesGroup):
+    waiting_year = State()
+
+
+@router.callback_query(F.data == "pnl_export_year")
+async def cb_pnl_export_year(call: CallbackQuery, state: FSMContext):
+    await state.set_state(PnlExportState.waiting_year)
+    now = datetime.now()
+    await call.message.edit_text(
+        f"За какой год выгрузить ПнЛ?\nВведи год (например: {now.year}):",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="pnl_report")]
+        ])
+    )
+
+
+@router.message(PnlExportState.waiting_year)
+async def msg_pnl_export_year(message: Message, state: FSMContext):
+    from app.database import get_pnl_report
+    import io, openpyxl
+    await state.clear()
+    try:
+        year = int(message.text.strip())
+        if year < 2020 or year > 2030:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи корректный год, например: 2026")
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"ПнЛ {year}"
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    # Заголовки
+    headers = ["Показатель"] + [MONTHS[m] for m in range(1, 13)]
+    ws.append(headers)
+
+    # Собираем данные по всем месяцам
+    all_data = {}
+    for m in range(1, 13):
+        all_data[m] = await get_pnl_report(message.from_user.id, year, m)
+
+    rows = [
+        ("Выручка", lambda d: d['income']),
+        ("Переменные расходы", lambda d: -d['variable']),
+        ("Маржинальная прибыль", lambda d: d['gross_profit']),
+        ("Постоянные расходы", lambda d: -d['fixed']),
+        ("EBITDA", lambda d: d['ebitda']),
+        ("Амортизация", lambda d: -d['depreciation']),
+        ("Налоги", lambda d: -d['tax']),
+        ("Кредит (тело)", lambda d: -d['loan_body']),
+        ("Кредит (проценты)", lambda d: -d['loan_pct']),
+        ("Чистая прибыль", lambda d: d['net_profit']),
+    ]
+
+    for label, fn in rows:
+        row = [label] + [fn(all_data[m]) for m in range(1, 13)]
+        ws.append(row)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from aiogram.types import BufferedInputFile
+    await message.answer_document(
+        BufferedInputFile(buf.read(), filename=f"pnl_{year}.xlsx"),
+        caption=f"ПнЛ за {year} год"
+    )
+
+
+# --- Дашборд с выбором месяца ---
+
+@router.callback_query(F.data == "dashboard")
+async def cb_dashboard_menu(call: CallbackQuery):
+    now = datetime.now()
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    months = []
+    for i in range(3):
+        m = now.month - i
+        y = now.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        months.append((y, m))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[InlineKeyboardButton(
+            text=f"{MONTHS[m]} {y}",
+            callback_data=f"dash:{y}:{m}"
+        )] for y, m in months],
+        [InlineKeyboardButton(text="Выгрузить за год в Excel", callback_data="dashboard_export_year")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+    ])
+    await call.message.edit_text("Табло управленца — выбери месяц:", parse_mode=None, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("dash:"))
+async def cb_dashboard_by_month(call: CallbackQuery):
+    from app.database import get_dashboard, can_use_feature
+    if not await can_use_feature(call.from_user.id, 'business_tools'):
+        await call.message.edit_text(
+            "Табло управленца доступно на тарифе Business.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    _, year, month = call.data.split(":")
+    year, month = int(year), int(month)
+    d = await get_dashboard(call.from_user.id, year, month)
+
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    if d['dynamics'] is not None:
+        dyn_icon = "📈" if d['dynamics'] >= 0 else "📉"
+        dyn_str = f"{dyn_icon} {d['dynamics']:+.1f}% vs прошлый месяц"
+    else:
+        dyn_str = "Нет данных за прошлый месяц"
+
+    upcoming_str = ""
+    if d['upcoming']:
+        upcoming_str = "\nБлижайшие платежи (7 дней):\n"
+        for p in d['upcoming']:
+            upcoming_str += f"  {p[2].strftime('%d.%m')} {p[0]} — {float(p[1]):,.0f} руб.\n"
+
+    top_cats = sorted([c for c in d['categories'] if c[1] in ('fixed','variable')],
+                      key=lambda x: x[2], reverse=True)[:3]
+    top_str = ""
+    if top_cats:
+        top_str = "\nТоп расходов:\n"
+        for name, kind, total in top_cats:
+            pct = total / d['income'] * 100 if d['income'] > 0 else 0
+            top_str += f"  {name}: {total:,.0f} ({pct:.1f}%)\n"
+
+    text = (
+        f"Табло управленца — {MONTHS[month]} {year}\n\n"
+        f"Выручка: {d['income']:,.0f} руб.\n"
+        f"Переменные расходы: -{d['variable_expense']:,.0f} руб.\n"
+        f"Постоянные расходы: -{d['fixed_expense']:,.0f} руб.\n\n"
+        f"EBITDA: {d['ebitda']:,.0f} руб."
+    )
+
+    if d['depreciation'] > 0:
+        text += f"\n  Амортизация: -{d['depreciation']:,.0f}"
+    if d['tax'] > 0:
+        text += f"\n  Налоги: -{d['tax']:,.0f}"
+    if d['loan_body'] > 0 or d['loan_pct'] > 0:
+        text += f"\n  Кредиты: -{d['loan_body']+d['loan_pct']:,.0f}"
+
+    net_icon = "✅" if d['net_profit'] >= 0 else "🔴"
+    text += (
+        f"\n\n{net_icon} Чистая прибыль: {d['net_profit']:,.0f} руб. ({d['net_profit_pct']:.1f}%)\n"
+        f"{dyn_str}\n"
+        f"\nТранзакций: {d['tx_count']}"
+        f"{top_str}"
+        f"{upcoming_str}"
+    )
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Назад", callback_data="dashboard")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
+
+
+@router.callback_query(F.data == "dashboard_export_year")
+async def cb_dashboard_export_year(call: CallbackQuery, state: FSMContext):
+    await state.set_state(DashboardExportState.waiting_year)
+    now = datetime.now()
+    await call.message.edit_text(
+        f"За какой год выгрузить табло?\nВведи год (например: {now.year}):",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="dashboard")]
+        ])
+    )
+
+
+@router.message(DashboardExportState.waiting_year)
+async def msg_dashboard_export_year(message: Message, state: FSMContext):
+    from app.database import get_dashboard
+    import io, openpyxl
+    await state.clear()
+    try:
+        year = int(message.text.strip())
+        if year < 2020 or year > 2030:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи корректный год, например: 2026")
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Дашборд {year}"
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    headers = ["Показатель"] + [MONTHS[m] for m in range(1, 13)]
+    ws.append(headers)
+
+    all_data = {}
+    for m in range(1, 13):
+        all_data[m] = await get_dashboard(message.from_user.id, year, m)
+
+    rows = [
+        ("Выручка", lambda d: d['income']),
+        ("Переменные расходы", lambda d: -d['variable_expense']),
+        ("Постоянные расходы", lambda d: -d['fixed_expense']),
+        ("EBITDA", lambda d: d['ebitda']),
+        ("Чистая прибыль", lambda d: d['net_profit']),
+        ("% ЧП", lambda d: round(d['net_profit_pct'], 1)),
+        ("Транзакций", lambda d: d['tx_count']),
+    ]
+
+    for label, fn in rows:
+        row = [label] + [fn(all_data[m]) for m in range(1, 13)]
+        ws.append(row)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from aiogram.types import BufferedInputFile
+    await message.answer_document(
+        BufferedInputFile(buf.read(), filename=f"dashboard_{year}.xlsx"),
+        caption=f"Табло управленца за {year} год"
+    )
+
+
+# --- Экспорт ПнЛ за год ---
+
+class PnlExportState(StatesGroup):
+    waiting_year = State()
+
+
+class DashboardExportState(StatesGroup):
+    waiting_year = State()
+
+
+@router.callback_query(F.data == "pnl_export_year")
+async def cb_pnl_export_year(call: CallbackQuery, state: FSMContext):
+    await state.set_state(PnlExportState.waiting_year)
+    now = datetime.now()
+    await call.message.edit_text(
+        f"За какой год выгрузить ПнЛ?\nВведи год (например: {now.year}):",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="pnl_report")]
+        ])
+    )
+
+
+@router.message(PnlExportState.waiting_year)
+async def msg_pnl_export_year(message: Message, state: FSMContext):
+    from app.database import get_pnl_report
+    import io, openpyxl
+    await state.clear()
+    try:
+        year = int(message.text.strip())
+        if year < 2020 or year > 2030:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи корректный год, например: 2026")
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"ПнЛ {year}"
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    # Заголовки
+    headers = ["Показатель"] + [MONTHS[m] for m in range(1, 13)]
+    ws.append(headers)
+
+    # Собираем данные по всем месяцам
+    all_data = {}
+    for m in range(1, 13):
+        all_data[m] = await get_pnl_report(message.from_user.id, year, m)
+
+    rows = [
+        ("Выручка", lambda d: d['income']),
+        ("Переменные расходы", lambda d: -d['variable']),
+        ("Маржинальная прибыль", lambda d: d['gross_profit']),
+        ("Постоянные расходы", lambda d: -d['fixed']),
+        ("EBITDA", lambda d: d['ebitda']),
+        ("Амортизация", lambda d: -d['depreciation']),
+        ("Налоги", lambda d: -d['tax']),
+        ("Кредит (тело)", lambda d: -d['loan_body']),
+        ("Кредит (проценты)", lambda d: -d['loan_pct']),
+        ("Чистая прибыль", lambda d: d['net_profit']),
+    ]
+
+    for label, fn in rows:
+        row = [label] + [fn(all_data[m]) for m in range(1, 13)]
+        ws.append(row)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from aiogram.types import BufferedInputFile
+    await message.answer_document(
+        BufferedInputFile(buf.read(), filename=f"pnl_{year}.xlsx"),
+        caption=f"ПнЛ за {year} год"
+    )
+
+
+# --- Дашборд с выбором месяца ---
+
+@router.callback_query(F.data == "dashboard")
+async def cb_dashboard_menu(call: CallbackQuery):
+    now = datetime.now()
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    months = []
+    for i in range(3):
+        m = now.month - i
+        y = now.year
+        if m <= 0:
+            m += 12
+            y -= 1
+        months.append((y, m))
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[InlineKeyboardButton(
+            text=f"{MONTHS[m]} {y}",
+            callback_data=f"dash:{y}:{m}"
+        )] for y, m in months],
+        [InlineKeyboardButton(text="Выгрузить за год в Excel", callback_data="dashboard_export_year")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+    ])
+    await call.message.edit_text("Табло управленца — выбери месяц:", parse_mode=None, reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("dash:"))
+async def cb_dashboard_by_month(call: CallbackQuery):
+    from app.database import get_dashboard, can_use_feature
+    if not await can_use_feature(call.from_user.id, 'business_tools'):
+        await call.message.edit_text(
+            "Табло управленца доступно на тарифе Business.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    _, year, month = call.data.split(":")
+    year, month = int(year), int(month)
+    d = await get_dashboard(call.from_user.id, year, month)
+
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    if d['dynamics'] is not None:
+        dyn_icon = "📈" if d['dynamics'] >= 0 else "📉"
+        dyn_str = f"{dyn_icon} {d['dynamics']:+.1f}% vs прошлый месяц"
+    else:
+        dyn_str = "Нет данных за прошлый месяц"
+
+    upcoming_str = ""
+    if d['upcoming']:
+        upcoming_str = "\nБлижайшие платежи (7 дней):\n"
+        for p in d['upcoming']:
+            upcoming_str += f"  {p[2].strftime('%d.%m')} {p[0]} — {float(p[1]):,.0f} руб.\n"
+
+    top_cats = sorted([c for c in d['categories'] if c[1] in ('fixed','variable')],
+                      key=lambda x: x[2], reverse=True)[:3]
+    top_str = ""
+    if top_cats:
+        top_str = "\nТоп расходов:\n"
+        for name, kind, total in top_cats:
+            pct = total / d['income'] * 100 if d['income'] > 0 else 0
+            top_str += f"  {name}: {total:,.0f} ({pct:.1f}%)\n"
+
+    text = (
+        f"Табло управленца — {MONTHS[month]} {year}\n\n"
+        f"Выручка: {d['income']:,.0f} руб.\n"
+        f"Переменные расходы: -{d['variable_expense']:,.0f} руб.\n"
+        f"Постоянные расходы: -{d['fixed_expense']:,.0f} руб.\n\n"
+        f"EBITDA: {d['ebitda']:,.0f} руб."
+    )
+
+    if d['depreciation'] > 0:
+        text += f"\n  Амортизация: -{d['depreciation']:,.0f}"
+    if d['tax'] > 0:
+        text += f"\n  Налоги: -{d['tax']:,.0f}"
+    if d['loan_body'] > 0 or d['loan_pct'] > 0:
+        text += f"\n  Кредиты: -{d['loan_body']+d['loan_pct']:,.0f}"
+
+    net_icon = "✅" if d['net_profit'] >= 0 else "🔴"
+    text += (
+        f"\n\n{net_icon} Чистая прибыль: {d['net_profit']:,.0f} руб. ({d['net_profit_pct']:.1f}%)\n"
+        f"{dyn_str}\n"
+        f"\nТранзакций: {d['tx_count']}"
+        f"{top_str}"
+        f"{upcoming_str}"
+    )
+
+    await call.message.edit_text(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Назад", callback_data="dashboard")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
+
+
+@router.callback_query(F.data == "dashboard_export_year")
+async def cb_dashboard_export_year(call: CallbackQuery, state: FSMContext):
+    await state.set_state(DashboardExportState.waiting_year)
+    now = datetime.now()
+    await call.message.edit_text(
+        f"За какой год выгрузить табло?\nВведи год (например: {now.year}):",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="dashboard")]
+        ])
+    )
+
+
+@router.message(DashboardExportState.waiting_year)
+async def msg_dashboard_export_year(message: Message, state: FSMContext):
+    from app.database import get_dashboard
+    import io, openpyxl
+    await state.clear()
+    try:
+        year = int(message.text.strip())
+        if year < 2020 or year > 2030:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введи корректный год, например: 2026")
+        return
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Дашборд {year}"
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+
+    headers = ["Показатель"] + [MONTHS[m] for m in range(1, 13)]
+    ws.append(headers)
+
+    all_data = {}
+    for m in range(1, 13):
+        all_data[m] = await get_dashboard(message.from_user.id, year, m)
+
+    rows = [
+        ("Выручка", lambda d: d['income']),
+        ("Переменные расходы", lambda d: -d['variable_expense']),
+        ("Постоянные расходы", lambda d: -d['fixed_expense']),
+        ("EBITDA", lambda d: d['ebitda']),
+        ("Чистая прибыль", lambda d: d['net_profit']),
+        ("% ЧП", lambda d: round(d['net_profit_pct'], 1)),
+        ("Транзакций", lambda d: d['tx_count']),
+    ]
+
+    for label, fn in rows:
+        row = [label] + [fn(all_data[m]) for m in range(1, 13)]
+        ws.append(row)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    from aiogram.types import BufferedInputFile
+    await message.answer_document(
+        BufferedInputFile(buf.read(), filename=f"dashboard_{year}.xlsx"),
+        caption=f"Табло управленца за {year} год"
     )
