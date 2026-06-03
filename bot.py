@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.handlers.main import router as main_router
 from app.handlers.business import router as business_router
+from app.handlers.ai_assistant import router as ai_router
 from app.handlers.recurring import router as recurring_router
 from app.handlers.premium import router as premium_router
 from app.database import get_pool, close_pool
@@ -29,6 +30,7 @@ async def main():
 
     dp.include_router(main_router)
     dp.include_router(business_router)
+    dp.include_router(ai_router)
     dp.include_router(recurring_router)
     dp.include_router(premium_router)
 

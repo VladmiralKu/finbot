@@ -12,7 +12,7 @@ def main_menu():
             InlineKeyboardButton(text="📋 Последние",       callback_data="recent"),
         ],
         [
-            InlineKeyboardButton(text="🤖 ИИ-анализ",   callback_data="ai_analyze"),
+            InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant"),
             InlineKeyboardButton(text="📷 Фото чека",   callback_data="scan_receipt"),
         ],
         [
