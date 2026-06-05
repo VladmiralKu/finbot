@@ -41,27 +41,27 @@ async def get_ai_response(user_id: int, user_message: str, history: list) -> tup
         "Если транзакции нет - не пиши TRANSACTION."
     )
 
-    messages = history[-10:] + [{"role": "user", "content": user_message}]
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += history[-10:]
+    messages += [{"role": "user", "content": user_message}]
 
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "https://api.anthropic.com/v1/messages",
+            "https://api.openai.com/v1/chat/completions",
             headers={
-                "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
+                "Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", ""),
+                "Content-Type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": "gpt-4o",
                 "max_tokens": 1000,
-                "system": system_prompt,
                 "messages": messages,
             },
             timeout=30.0
         )
         data = response.json()
 
-    ai_text = data["content"][0]["text"]
+    ai_text = data["choices"][0]["message"]["content"]
     new_history = history + [
         {"role": "user", "content": user_message},
         {"role": "assistant", "content": ai_text},
