@@ -82,8 +82,8 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
     row = await fetchone(
         """SELECT COUNT(*) FROM ai_usage
            WHERE user_id=%s
-             AND EXTRACT(YEAR FROM created_at)=%s
-             AND EXTRACT(MONTH FROM created_at)=%s""",
+             AND EXTRACT(YEAR FROM used_at)=%s
+             AND EXTRACT(MONTH FROM used_at)=%s""",
         (user_id, now.year, now.month)
     )
     used = int(row[0]) if row else 0
@@ -93,7 +93,7 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
 async def log_ai_usage(user_id: int):
     from app.database import execute
     await execute(
-        "INSERT INTO ai_usage (user_id, created_at) VALUES (%s, NOW())",
+        "INSERT INTO ai_usage (user_id, used_at) VALUES (%s, NOW())",
         (user_id,)
     )
 
