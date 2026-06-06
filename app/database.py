@@ -43,9 +43,12 @@ async def fetchall(query, params=None):
 async def get_or_create_user(user_id, username, full_name, lang="ru"):
     user = await fetchone("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
+        from datetime import datetime, timedelta
+        trial_until = datetime.now() + timedelta(days=3)
         await execute(
-            "INSERT INTO users (id, username, full_name, language_code) VALUES (%s,%s,%s,%s)",
-            (user_id, username, full_name, lang),
+            """INSERT INTO users (id, username, full_name, language_code, subscription_tier, premium_until)
+               VALUES (%s,%s,%s,%s,'premium',%s)""",
+            (user_id, username, full_name, lang, trial_until),
         )
         await execute("SELECT create_default_categories(%s)", (user_id,))
     return user_id
@@ -299,7 +302,25 @@ async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int 
     )
 
 
+async def check_and_expire_trial(user_id):
+    """Сбрасывает тариф если пробный период истёк"""
+    from datetime import datetime
+    row = await fetchone(
+        "SELECT subscription_tier, premium_until FROM users WHERE id = %s",
+        (user_id,)
+    )
+    if not row:
+        return
+    tier, until = row
+    if tier == 'premium' and until and until < datetime.now():
+        await execute(
+            "UPDATE users SET subscription_tier = 'free', premium_until = NULL WHERE id = %s",
+            (user_id,)
+        )
+
+
 async def get_user_tier(user_id):
+    await check_and_expire_trial(user_id)
     row = await fetchone(
         "SELECT subscription_tier, premium_until FROM users WHERE id = %s",
         (user_id,)
@@ -308,8 +329,11 @@ async def get_user_tier(user_id):
         return 'free'
     tier = row[0] or 'free'
     from datetime import datetime
-    # Если тариф платный но срок истёк — возвращаем free
     if tier != 'free' and row[1] and row[1] < datetime.now():
+        await execute(
+            "UPDATE users SET subscription_tier = 'free' WHERE id = %s",
+            (user_id,)
+        )
         return 'free'
     return tier
 
