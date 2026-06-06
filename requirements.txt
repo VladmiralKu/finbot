@@ -8,3 +8,4 @@ stripe==10.10.0
 
 # cache bust
 openpyxl>=3.1.0
+matplotlib==3.9.0

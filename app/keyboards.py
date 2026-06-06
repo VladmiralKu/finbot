@@ -20,6 +20,7 @@ def main_menu():
             InlineKeyboardButton(text="⭐ Тарифы",    callback_data="premium"),
         ],
         [
+            InlineKeyboardButton(text="📈 График", callback_data="chart_month"),
             InlineKeyboardButton(text="💼 Бизнес", callback_data="business_tools"),
         ],
     ])

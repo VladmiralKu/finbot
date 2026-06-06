@@ -716,3 +716,24 @@ async def cb_pnl_report(call: CallbackQuery):
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
+
+
+# --- График ---
+
+@router.callback_query(F.data == "chart_month")
+async def cb_chart_month(call: CallbackQuery):
+    from app.charts import generate_monthly_chart
+    from aiogram.types import BufferedInputFile
+    now = datetime.now()
+    await call.answer("Генерирую график...")
+    try:
+        img = await generate_monthly_chart(call.from_user.id, now.year, now.month)
+        await call.message.answer_photo(
+            BufferedInputFile(img, filename="chart.png"),
+            caption="График за " + str(now.month) + "/" + str(now.year),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+    except Exception as e:
+        await call.message.answer("Ошибка генерации графика: " + str(e))
