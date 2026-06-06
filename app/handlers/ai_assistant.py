@@ -13,32 +13,89 @@ class AIState(StatesGroup):
     chatting = State()
 
 
-async def get_ai_response(user_id: int, user_message: str, history: list) -> tuple[str, list]:
-    from app.database import get_monthly_summary, get_categories, get_user_tier, fetchone
-    import os
-
+async def get_user_context(user_id: int) -> str:
+    from app.database import get_monthly_summary, get_categories, fetchall, fetchone
     now = datetime.now()
+
+    # Текущий месяц
     summary = await get_monthly_summary(user_id, now.year, now.month)
     categories = await get_categories(user_id)
+    cat_list = ", ".join([c["name"] for c in categories]) if categories else "нет"
 
-    cat_list = ", ".join([c["name"] for c in categories]) if categories else "нет категорий"
+    # Прошлый месяц
+    pm = now.month - 1
+    py = now.year
+    if pm <= 0:
+        pm += 12
+        py -= 1
+    prev = await get_monthly_summary(user_id, py, pm)
+
+    # Топ расходов
+    top = await fetchall(
+        """SELECT c.name, SUM(t.amount) as total
+           FROM transactions t
+           JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id = %s AND t.type = 'expense'
+             AND EXTRACT(YEAR FROM t.transaction_date) = %s
+             AND EXTRACT(MONTH FROM t.transaction_date) = %s
+           GROUP BY c.name ORDER BY total DESC LIMIT 5""",
+        (user_id, now.year, now.month)
+    )
+
+    # Цели пользователя
+    goals = await fetchall(
+        "SELECT goal_text FROM user_goals WHERE user_id = %s ORDER BY updated_at DESC LIMIT 5",
+        (user_id,)
+    )
+    goals_str = "\n".join(["- " + g[0] for g in goals]) if goals else "не заданы"
+
+    top_str = "\n".join(["- " + r[0] + ": " + "{:,.0f}".format(float(r[1])) + " руб." for r in top]) if top else "нет данных"
+
+    return (
+        "КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ:\n"
+        "Дата: " + now.strftime("%d.%m.%Y") + "\n\n"
+        "ТЕКУЩИЙ МЕСЯЦ (" + str(now.month) + "/" + str(now.year) + "):\n"
+        "Доходы: " + "{:,.0f}".format(summary['income']) + " руб.\n"
+        "Расходы: " + "{:,.0f}".format(summary['total_expense']) + " руб.\n"
+        "Баланс: " + "{:,.0f}".format(summary['balance']) + " руб.\n\n"
+        "ПРОШЛЫЙ МЕСЯЦ:\n"
+        "Доходы: " + "{:,.0f}".format(prev['income']) + " руб.\n"
+        "Расходы: " + "{:,.0f}".format(prev['total_expense']) + " руб.\n\n"
+        "ТОП РАСХОДОВ:\n" + top_str + "\n\n"
+        "КАТЕГОРИИ: " + cat_list + "\n\n"
+        "ЦЕЛИ ПОЛЬЗОВАТЕЛЯ:\n" + goals_str
+    )
+
+
+async def get_ai_response(user_id: int, user_message: str, history: list) -> tuple[str, list]:
+    import os
+
+    context = await get_user_context(user_id)
 
     system_prompt = (
-        "Ты финансовый ИИ-ассистент в приложении Баланс. "
-        "Помогаешь пользователю управлять личными финансами и финансами бизнеса. "
-        "Отвечай кратко и по делу. Используй цифры из контекста.\n\n"
-        "ТЕКУЩИЙ КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ:\n"
-        "Месяц: " + str(now.month) + "/" + str(now.year) + "\n"
-        "Доходы за месяц: " + "{:,.0f}".format(summary['income']) + " руб.\n"
-        "Расходы за месяц: " + "{:,.0f}".format(summary['total_expense']) + " руб.\n"
-        "Баланс: " + "{:,.0f}".format(summary['balance']) + " руб.\n"
-        "Категории: " + cat_list + "\n\n"
-        "ВАЖНО: Если пользователь хочет внести транзакцию, выдели её в конце ответа в формате:\n"
-        "TRANSACTION: -1500 продукты бн\n"
-        "или\n"
-        "TRANSACTION: +50000 зарплата бн\n"
-        "Формат: знак+сумма категория кошелёк(бн/нал) [на месяц]\n"
-        "Если транзакции нет - не пиши TRANSACTION."
+        "Ты Баланс — персональный финансовый ИИ-советник. "
+        "Ты помогаешь только с финансовыми вопросами: учёт доходов и расходов, "
+        "анализ трат, планирование бюджета, выход из финансового кризиса, "
+        "накопления, кредиты, инвестиции. "
+        "Если вопрос не связан с финансами — вежливо откажи и верни разговор к финансам.\n\n"
+        "Ты умеешь:\n"
+        "- Вносить транзакции по запросу пользователя\n"
+        "- Анализировать расходы и доходы\n"
+        "- Составлять финансовые планы\n"
+        "- Давать конкретные рекомендации с цифрами\n"
+        "- Запоминать цели пользователя\n\n"
+        "ПРАВИЛА ОТВЕТОВ:\n"
+        "- Отвечай кратко и конкретно\n"
+        "- Используй цифры из контекста\n"
+        "- Давай actionable советы\n"
+        "- Не повторяй контекст пользователю дословно\n\n"
+        "ДЕЙСТВИЯ (добавляй в конец ответа если нужно):\n"
+        "Для внесения транзакции:\n"
+        "TRANSACTION: -1500 Еда/Продукты нал\n"
+        "Для сохранения цели:\n"
+        "GOAL: накопить 200000 к августу 2026\n"
+        "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
+        + context
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -75,7 +132,7 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
     if tier == 'free':
         return False, 0, 0
 
-    limits = {'start': 50, 'premium': 200, 'business': 9999}
+    limits = {'start': 100, 'premium': 9999, 'business': 9999}
     limit = limits.get(tier, 0)
 
     now = datetime.now()
@@ -98,13 +155,47 @@ async def log_ai_usage(user_id: int):
     )
 
 
+async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
+    from app.parser import parse_transaction
+    from app.database import get_categories, add_transaction, execute
+    actions_log = ""
+    clean_lines = []
+
+    for line in ai_text.split("\n"):
+        if line.startswith("TRANSACTION:"):
+            tx_str = line.replace("TRANSACTION:", "").strip()
+            try:
+                categories = await get_categories(user_id)
+                parsed = parse_transaction(tx_str, categories)
+                if parsed:
+                    await add_transaction(user_id, **parsed)
+                    actions_log += "\nТранзакция внесена!"
+            except Exception as e:
+                actions_log += "\nОшибка внесения транзакции: " + str(e)
+        elif line.startswith("GOAL:"):
+            goal_text = line.replace("GOAL:", "").strip()
+            try:
+                await execute(
+                    "INSERT INTO user_goals (user_id, goal_text) VALUES (%s, %s)",
+                    (user_id, goal_text)
+                )
+                actions_log += "\nЦель сохранена!"
+            except Exception as e:
+                actions_log += "\nОшибка сохранения цели: " + str(e)
+        else:
+            clean_lines.append(line)
+
+    clean_text = "\n".join(clean_lines).strip()
+    return clean_text, actions_log
+
+
 @router.callback_query(F.data == "ai_assistant")
 async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
     from app.database import get_user_tier
     tier = await get_user_tier(call.from_user.id)
     if tier == 'free':
         await call.message.edit_text(
-            "ИИ-ассистент доступен с тарифа Старт (99 руб/мес).",
+            "ИИ-ассистент доступен с тарифа Старт (149 руб/мес).",
             parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
@@ -130,13 +221,14 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
 
     limit_str = "безлимит" if limit >= 9999 else str(used) + "/" + str(limit)
     await call.message.edit_text(
-        "ИИ-ассистент Баланс\n\n"
+        "Баланс — финансовый советник\n\n"
         "Могу помочь:\n"
         "- Внести транзакцию ('потратил 3500 на продукты')\n"
         "- Проанализировать расходы\n"
+        "- Составить план выхода из минуса\n"
+        "- Сохранить финансовую цель\n"
         "- Ответить на вопросы по финансам\n\n"
-        "Сообщений использовано: " + limit_str + "\n\n"
-        "Напиши что хочешь сделать:",
+        "Сообщений: " + limit_str,
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
@@ -147,9 +239,8 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "ai_end")
 async def cb_ai_end(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    from app.keyboards import main_menu
     await call.message.edit_text(
-        "Чат с ИИ-ассистентом завершён.",
+        "Чат завершён.",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -159,14 +250,11 @@ async def cb_ai_end(call: CallbackQuery, state: FSMContext):
 
 @router.message(AIState.chatting)
 async def msg_ai_chat(message: Message, state: FSMContext):
-    from app.parser import parse_transaction
-    from app.database import get_categories, add_transaction
-
     can, used, limit = await check_ai_limit(message.from_user.id)
     if not can:
         await state.clear()
         await message.answer(
-            "Лимит ИИ-ассистента исчерпан. Используй тариф выше для безлимитного доступа.",
+            "Лимит ИИ-ассистента исчерпан.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -177,7 +265,7 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     data = await state.get_data()
     history = data.get('history', [])
 
-    await message.answer("Думаю...", parse_mode=None)
+    thinking_msg = await message.answer("Думаю...", parse_mode=None)
 
     try:
         ai_text, new_history = await get_ai_response(
@@ -185,34 +273,18 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         )
         await log_ai_usage(message.from_user.id)
     except Exception as e:
-        await message.answer("Ошибка ИИ: " + str(e))
+        await thinking_msg.delete()
+        await message.answer("Ошибка: " + str(e))
         return
 
     await state.update_data(history=new_history[-20:])
+    clean_text, actions_log = await process_actions(message.from_user.id, ai_text)
 
-    # Проверяем есть ли транзакция
-    tx_added = ""
-    if "TRANSACTION:" in ai_text:
-        lines = ai_text.split("\n")
-        clean_lines = []
-        for line in lines:
-            if line.startswith("TRANSACTION:"):
-                tx_str = line.replace("TRANSACTION:", "").strip()
-                try:
-                    categories = await get_categories(message.from_user.id)
-                    parsed = parse_transaction(tx_str, categories)
-                    if parsed:
-                        tx_id = await add_transaction(message.from_user.id, **parsed)
-                        tx_added = "\n\nТранзакция внесена!"
-                except Exception:
-                    pass
-            else:
-                clean_lines.append(line)
-        ai_text = "\n".join(clean_lines).strip()
+    await thinking_msg.delete()
 
     limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
     await message.answer(
-        ai_text + tx_added + "\n\n[" + limit_str + "]",
+        clean_text + actions_log + "\n\n[" + limit_str + "]",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
