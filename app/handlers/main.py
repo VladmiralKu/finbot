@@ -178,12 +178,11 @@ async def cb_report_by_month(call: CallbackQuery):
         for row in breakdown[:6]:
             icon = "🔒" if row["kind"] == "fixed" else "🛒"
             text += f"  {icon} {row['name']}: {float(row['total']):,.0f} ₽\n"
-    prem = await is_premium(call.from_user.id)
-    if not prem:
-        text += "\n⭐ <i>ИИ-анализ доступен в Premium</i>"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🤖 ИИ-анализ ⭐", callback_data="ai_analyze")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="main_menu")],
+        [InlineKeyboardButton(text="📈 График", callback_data="chart:" + str(year) + ":" + str(month))],
+        [InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant")],
+        [InlineKeyboardButton(text="Назад", callback_data="report_month")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
