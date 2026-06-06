@@ -23,7 +23,6 @@ def main_menu():
 
 def reports_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📈 График", callback_data="chart_month")],
         [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
         [InlineKeyboardButton(text="📊 Отчёт ДДС", callback_data="report_month")],
         [InlineKeyboardButton(text="📝 Заметки", callback_data="notes_menu")],

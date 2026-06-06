@@ -181,7 +181,6 @@ async def cb_report_by_month(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📈 График", callback_data="chart:" + str(year) + ":" + str(month))],
         [InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant")],
-        [InlineKeyboardButton(text="Назад", callback_data="report_month")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -751,3 +750,25 @@ async def cb_reports_menu(call: CallbackQuery):
         parse_mode=None,
         reply_markup=reports_menu_kb()
     )
+
+
+@router.callback_query(F.data.startswith("chart:"))
+async def cb_chart_by_month(call: CallbackQuery):
+    from app.charts import generate_monthly_chart
+    from aiogram.types import BufferedInputFile
+    parts = call.data.split(":")
+    year, month = int(parts[1]), int(parts[2])
+    MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+              7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+    await call.answer("Генерирую график...")
+    try:
+        img = await generate_monthly_chart(call.from_user.id, year, month)
+        await call.message.answer_photo(
+            BufferedInputFile(img, filename="chart.png"),
+            caption="График за " + MONTHS[month] + " " + str(year),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+    except Exception as e:
+        await call.message.answer("Ошибка: " + str(e))
