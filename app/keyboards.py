@@ -24,7 +24,7 @@ def reports_menu_kb():
         [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
         [InlineKeyboardButton(text="📊 Отчёт ДДС", callback_data="report_month")],
         [InlineKeyboardButton(text="📝 Заметки", callback_data="notes_menu")],
-        [InlineKeyboardButton(text="💼 Бизнес инструменты", callback_data="business_tools")],
+
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
 
