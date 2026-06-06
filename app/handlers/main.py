@@ -46,7 +46,10 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await call.message.edit_text("Выбирай действие:", reply_markup=main_menu())
+    try:
+        await call.message.edit_text("Выбирай действие:", reply_markup=main_menu())
+    except Exception:
+        await call.message.answer("Выбирай действие:", reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "add_expense")
