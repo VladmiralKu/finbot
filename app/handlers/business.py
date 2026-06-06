@@ -169,7 +169,7 @@ async def cb_notes_list(call: CallbackQuery):
     has_more = len(rows) > limit
     rows = rows[:limit]
 
-    text = "Zametki:\n\n"
+    text = "Заметки:\n\n"
     for row in rows:
         note_id, created_at, note_text = row
         date_str = created_at.strftime("%d.%m.%Y %H:%M")
