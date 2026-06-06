@@ -91,7 +91,7 @@ async def cb_notes_menu(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Записать мысль", callback_data="note_add")],
         [InlineKeyboardButton(text="Старые заметки", callback_data="notes_list:0")],
-        [InlineKeyboardButton(text="Назад", callback_data="business_tools")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     await call.message.edit_text("Заметки:", parse_mode=None, reply_markup=kb)
 
@@ -161,7 +161,7 @@ async def cb_notes_list(call: CallbackQuery):
         await call.message.edit_text(
             "Zametok poka net.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Назад", callback_data="notes_menu")]
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
             ])
         )
         return
@@ -185,7 +185,7 @@ async def cb_notes_list(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         buttons if buttons else [],
         [InlineKeyboardButton(text="Найти по номеру", callback_data="note_search")],
-        [InlineKeyboardButton(text="Назад", callback_data="notes_menu")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     await call.message.edit_text(text, parse_mode=None, reply_markup=kb)
 
