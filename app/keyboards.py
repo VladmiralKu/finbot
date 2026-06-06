@@ -8,21 +8,24 @@ def main_menu():
             InlineKeyboardButton(text="💰 Доход",  callback_data="add_income"),
         ],
         [
-            InlineKeyboardButton(text="📊 Отчёт за месяц", callback_data="report_month"),
-            InlineKeyboardButton(text="📋 Последние",       callback_data="recent"),
-        ],
-        [
-            InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant"),
-            InlineKeyboardButton(text="📷 Фото чека",   callback_data="scan_receipt"),
-        ],
-        [
-            InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar"),
+            InlineKeyboardButton(text="📋 Последние", callback_data="recent"),
             InlineKeyboardButton(text="⭐ Тарифы",    callback_data="premium"),
         ],
         [
-            InlineKeyboardButton(text="📈 График", callback_data="chart_month"),
-            InlineKeyboardButton(text="💼 Бизнес", callback_data="business_tools"),
+            InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant"),
+            InlineKeyboardButton(text="📊 Отчёты",        callback_data="reports_menu"),
         ],
+    ])
+
+
+def reports_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📈 График", callback_data="chart_month")],
+        [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
+        [InlineKeyboardButton(text="📊 Отчёт ДДС", callback_data="report_month")],
+        [InlineKeyboardButton(text="📝 Заметки", callback_data="notes_menu")],
+        [InlineKeyboardButton(text="💼 Бизнес инструменты", callback_data="business_tools")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
 
 

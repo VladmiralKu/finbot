@@ -737,3 +737,15 @@ async def cb_chart_month(call: CallbackQuery):
         )
     except Exception as e:
         await call.message.answer("Ошибка генерации графика: " + str(e))
+
+
+# --- Меню отчётов ---
+
+@router.callback_query(F.data == "reports_menu")
+async def cb_reports_menu(call: CallbackQuery):
+    from app.keyboards import reports_menu_kb
+    await call.message.edit_text(
+        "Отчёты и инструменты:",
+        parse_mode=None,
+        reply_markup=reports_menu_kb()
+    )
