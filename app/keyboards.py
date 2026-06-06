@@ -15,6 +15,9 @@ def main_menu():
             InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant"),
             InlineKeyboardButton(text="📊 Отчёты",        callback_data="reports_menu"),
         ],
+        [
+            InlineKeyboardButton(text="📝 Заметки", callback_data="notes_menu"),
+        ],
     ])
 
 
