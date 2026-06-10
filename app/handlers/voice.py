@@ -18,8 +18,8 @@ async def transcribe_voice(audio_bytes: bytes) -> str:
         return response.json().get("text", "")
 
 
-async def parse_voice_to_transaction(text: str) -> str:
-    """Просим GPT преобразовать текст в формат транзакции."""
+async def parse_voice_to_transaction(text: str) -> list:
+    """Просим GPT извлечь все транзакции из текста."""
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.openai.com/v1/chat/completions",
@@ -29,18 +29,17 @@ async def parse_voice_to_transaction(text: str) -> str:
             },
             json={
                 "model": "gpt-4o",
-                "max_tokens": 50,
+                "max_tokens": 200,
                 "messages": [
                     {
                         "role": "system",
                         "content": (
-                            "Преобразуй текст в формат транзакции: [+-]сумма категория\n"
+                            "Извлеки ВСЕ транзакции из текста. Каждая на новой строке в формате: [+-]сумма категория\n"
                             "Расход = минус, доход = плюс.\n"
                             "Примеры:\n"
-                            "- '500 рублей на продукты' → '-500 продукты'\n"
-                            "- 'заработал 50000' → '+50000 доходы'\n"
-                            "- 'потратил 300 на кофе' → '-300 кофе'\n"
-                            "Верни ТОЛЬКО строку транзакции, без пояснений."
+                            "- '500 на продукты и 300 на кофе' →\n-500 продукты\n-300 кофе\n"
+                            "- 'заработал 50000 и потратил 1000 на такси' →\n+50000 доходы\n-1000 такси\n"
+                            "Верни ТОЛЬКО строки транзакций, без пояснений."
                         )
                     },
                     {"role": "user", "content": text}
@@ -49,7 +48,8 @@ async def parse_voice_to_transaction(text: str) -> str:
             timeout=15.0
         )
         data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        result = data["choices"][0]["message"]["content"].strip()
+        return [line.strip() for line in result.split("\n") if line.strip()]
 
 
 @router.message(F.voice)
@@ -84,17 +84,20 @@ async def msg_voice(message: Message):
         await thinking.delete()
         await message.answer("Распознано: " + text)
 
-        # Преобразуем в формат транзакции через GPT
-        tx_str = await parse_voice_to_transaction(text)
+        # Преобразуем в формат транзакций через GPT
+        tx_lines = await parse_voice_to_transaction(text)
         categories = await get_categories(message.from_user.id)
-        parsed = parse_quick_input(tx_str)
+        added = []
 
-        if parsed and parsed.get('amount'):
+        for tx_str in tx_lines:
+            parsed = parse_quick_input(tx_str)
+            if not parsed or not parsed.get('amount'):
+                continue
+
             amount = parsed.get('amount')
             type_ = parsed.get('type', 'expense')
             hint = parsed.get('category_hint', '')
 
-            # Ищем категорию по hint
             category_id = None
             category_name = ''
             for cat in categories:
@@ -103,7 +106,6 @@ async def msg_voice(message: Message):
                     category_name = cat['name']
                     break
 
-            # Если не нашли — берём первую подходящую по типу
             if not category_id:
                 for cat in categories:
                     if cat.get('type') == type_:
@@ -121,14 +123,17 @@ async def msg_voice(message: Message):
                     comment=parsed.get('comment', '')
                 )
                 sign = "-" if type_ == 'expense' else "+"
-                await message.answer(
-                    "Записано: " + sign + str(int(amount)) + " руб. — " + category_name,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                    ])
-                )
-            else:
-                await message.answer("Не удалось определить категорию. Попробуй добавить вручную.")
+                added.append(sign + str(int(amount)) + " руб. — " + category_name)
+
+        if added:
+            await message.answer(
+                "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ])
+            )
+        else:
+            await message.answer("Не удалось определить категории.")
         else:
             # Отправляем текст прямо в ИИ-ассистент
             from app.handlers.ai_assistant import get_ai_response, log_ai_usage
