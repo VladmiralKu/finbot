@@ -6,25 +6,50 @@ import os
 router = Router()
 
 
-async def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
-    import io
+async def transcribe_voice(audio_bytes: bytes) -> str:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.openai.com/v1/audio/transcriptions",
-            headers={
-                "Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", ""),
-            },
-            files={
-                "file": (filename, audio_bytes, "audio/ogg"),
-            },
-            data={
-                "model": "whisper-1",
-                "language": "ru",
-            },
+            headers={"Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", "")},
+            files={"file": ("voice.ogg", audio_bytes, "audio/ogg")},
+            data={"model": "whisper-1", "language": "ru"},
             timeout=30.0
         )
+        return response.json().get("text", "")
+
+
+async def parse_voice_to_transaction(text: str) -> str:
+    """Просим GPT преобразовать текст в формат транзакции."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", ""),
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o",
+                "max_tokens": 50,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Преобразуй текст в формат транзакции: [+-]сумма категория\n"
+                            "Расход = минус, доход = плюс.\n"
+                            "Примеры:\n"
+                            "- '500 рублей на продукты' → '-500 продукты'\n"
+                            "- 'заработал 50000' → '+50000 доходы'\n"
+                            "- 'потратил 300 на кофе' → '-300 кофе'\n"
+                            "Верни ТОЛЬКО строку транзакции, без пояснений."
+                        )
+                    },
+                    {"role": "user", "content": text}
+                ],
+            },
+            timeout=15.0
+        )
         data = response.json()
-    return data.get("text", "")
+        return data["choices"][0]["message"]["content"].strip()
 
 
 @router.message(F.voice)
@@ -45,14 +70,11 @@ async def msg_voice(message: Message):
     thinking = await message.answer("Распознаю голос...")
 
     try:
-        # Скачиваем голосовое
         file = await message.bot.get_file(message.voice.file_id)
         file_bytes = await message.bot.download_file(file.file_path)
         audio_bytes = file_bytes.read()
 
-        # Транскрибируем через Whisper
         text = await transcribe_voice(audio_bytes)
-
         if not text:
             await thinking.delete()
             await message.answer("Не удалось распознать голос. Попробуй ещё раз.")
@@ -61,23 +83,23 @@ async def msg_voice(message: Message):
         await thinking.delete()
         await message.answer("Распознано: " + text)
 
-        # Пробуем распарсить как транзакцию
+        # Преобразуем в формат транзакции через GPT
+        tx_str = await parse_voice_to_transaction(text)
         categories = await get_categories(message.from_user.id)
-        parsed = parse_quick_input(text, categories)
+        parsed = parse_quick_input(tx_str)
 
-        if parsed:
+        if parsed and parsed.get('amount'):
             tx_id = await add_transaction(message.from_user.id, **parsed)
             sign = "-" if parsed.get('type') == 'expense' else "+"
             amount = parsed.get('amount', '')
-            cat = parsed.get('category_name', '')
+            cat = parsed.get('category_name', '') or parsed.get('category_hint', '') or ''
             await message.answer(
-                "Записано: " + sign + str(amount) + " руб. — " + str(cat),
+                "Записано: " + sign + str(int(amount)) + " руб. — " + str(cat),
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ])
             )
         else:
-            # Если не транзакция — отправляем в ИИ-ассистент
             await message.answer(
                 "Не похоже на транзакцию. Отправить в ИИ-ассистент?",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
