@@ -133,9 +133,7 @@ async def msg_voice(message: Message):
                 ])
             )
         else:
-            await message.answer("Не удалось определить категории.")
-        else:
-            # Отправляем текст прямо в ИИ-ассистент
+            # Не транзакция — отправляем в ИИ-ассистент
             from app.handlers.ai_assistant import get_ai_response, log_ai_usage
             thinking2 = await message.answer("Отправляю в ИИ-ассистент...")
             try:
