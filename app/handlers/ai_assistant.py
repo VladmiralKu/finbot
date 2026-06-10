@@ -150,7 +150,7 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
 async def log_ai_usage(user_id: int):
     from app.database import execute
     await execute(
-        "INSERT INTO ai_usage (user_id, used_at) VALUES (%s, NOW())",
+        "INSERT INTO ai_usage (user_id, usage_type, used_at) VALUES (%s, 'chat', NOW())",
         (user_id,)
     )
 
