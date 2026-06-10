@@ -86,6 +86,7 @@ async def msg_voice(message: Message):
 
         # Преобразуем в формат транзакций через GPT
         tx_lines = await parse_voice_to_transaction(text)
+        await message.answer("GPT вернул: " + str(tx_lines))
         categories = await get_categories(message.from_user.id)
         added = []
 
