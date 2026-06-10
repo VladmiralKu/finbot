@@ -71,9 +71,10 @@ async def msg_voice(message: Message):
 
     try:
         file = await message.bot.get_file(message.voice.file_id)
+        await thinking.edit_text("Скачиваю аудио...")
         file_bytes = await message.bot.download_file(file.file_path)
         audio_bytes = file_bytes.read()
-
+        await thinking.edit_text("Отправляю в Whisper...")
         text = await transcribe_voice(audio_bytes)
         if not text:
             await thinking.delete()
