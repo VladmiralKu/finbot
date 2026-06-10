@@ -90,16 +90,45 @@ async def msg_voice(message: Message):
         parsed = parse_quick_input(tx_str)
 
         if parsed and parsed.get('amount'):
-            tx_id = await add_transaction(message.from_user.id, **parsed)
-            sign = "-" if parsed.get('type') == 'expense' else "+"
-            amount = parsed.get('amount', '')
-            cat = parsed.get('category_name', '') or parsed.get('category_hint', '') or ''
-            await message.answer(
-                "Записано: " + sign + str(int(amount)) + " руб. — " + str(cat),
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ])
-            )
+            amount = parsed.get('amount')
+            type_ = parsed.get('type', 'expense')
+            hint = parsed.get('category_hint', '')
+
+            # Ищем категорию по hint
+            category_id = None
+            category_name = ''
+            for cat in categories:
+                if hint and hint.lower() in cat['name'].lower():
+                    category_id = cat['id']
+                    category_name = cat['name']
+                    break
+
+            # Если не нашли — берём первую подходящую по типу
+            if not category_id:
+                for cat in categories:
+                    if cat.get('type') == type_:
+                        category_id = cat['id']
+                        category_name = cat['name']
+                        break
+
+            if category_id:
+                await add_transaction(
+                    message.from_user.id,
+                    category_id=category_id,
+                    amount=amount,
+                    type_=type_,
+                    kind=parsed.get('kind', 'variable'),
+                    comment=parsed.get('comment', '')
+                )
+                sign = "-" if type_ == 'expense' else "+"
+                await message.answer(
+                    "Записано: " + sign + str(int(amount)) + " руб. — " + category_name,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ])
+                )
+            else:
+                await message.answer("Не удалось определить категорию. Попробуй добавить вручную.")
         else:
             await message.answer(
                 "Не похоже на транзакцию. Отправить в ИИ-ассистент?",
