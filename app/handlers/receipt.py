@@ -64,7 +64,7 @@ async def scan_receipt_with_ai(image_bytes: bytes) -> str:
 @router.message(F.photo)
 async def msg_photo_receipt(message: Message):
     from app.database import get_user_tier, get_categories, add_transaction
-    from app.parser import parse_transaction
+    from app.parser import parse_quick_input
 
     tier = await get_user_tier(message.from_user.id)
     if tier == 'free':
@@ -99,7 +99,7 @@ async def msg_photo_receipt(message: Message):
             if line.startswith("TRANSACTION:"):
                 tx_str = line.replace("TRANSACTION:", "").strip()
                 try:
-                    parsed = parse_transaction(tx_str, categories)
+                    parsed = parse_quick_input(tx_str, categories)
                     if parsed:
                         tx_id = await add_transaction(message.from_user.id, **parsed)
                         sign = "-" if parsed.get('type') == 'expense' else "+"

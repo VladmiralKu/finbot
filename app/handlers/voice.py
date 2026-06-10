@@ -30,7 +30,7 @@ async def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> s
 @router.message(F.voice)
 async def msg_voice(message: Message):
     from app.database import get_user_tier, get_categories, add_transaction
-    from app.parser import parse_transaction
+    from app.parser import parse_quick_input
 
     tier = await get_user_tier(message.from_user.id)
     if tier == 'free':
@@ -63,7 +63,7 @@ async def msg_voice(message: Message):
 
         # Пробуем распарсить как транзакцию
         categories = await get_categories(message.from_user.id)
-        parsed = parse_transaction(text, categories)
+        parsed = parse_quick_input(text, categories)
 
         if parsed:
             tx_id = await add_transaction(message.from_user.id, **parsed)
