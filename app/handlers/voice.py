@@ -130,13 +130,22 @@ async def msg_voice(message: Message):
             else:
                 await message.answer("Не удалось определить категорию. Попробуй добавить вручную.")
         else:
-            await message.answer(
-                "Не похоже на транзакцию. Отправить в ИИ-ассистент?",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Да, отправить ИИ", callback_data="ai_assistant")],
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ])
-            )
+            # Отправляем текст прямо в ИИ-ассистент
+            from app.handlers.ai_assistant import get_ai_response, log_ai_usage
+            thinking2 = await message.answer("Отправляю в ИИ-ассистент...")
+            try:
+                ai_text, _ = await get_ai_response(message.from_user.id, text, [])
+                await log_ai_usage(message.from_user.id)
+                await thinking2.delete()
+                await message.answer(
+                    ai_text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ])
+                )
+            except Exception as e:
+                await thinking2.delete()
+                await message.answer("Ошибка ИИ: " + str(e))
 
     except Exception as e:
         await thinking.delete()

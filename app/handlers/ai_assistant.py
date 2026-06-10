@@ -268,8 +268,9 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     thinking_msg = await message.answer("Думаю...", parse_mode=None)
 
     try:
+        user_text = message.text or message.caption or ""
         ai_text, new_history = await get_ai_response(
-            message.from_user.id, message.text or "", history
+            message.from_user.id, user_text, history
         )
         await log_ai_usage(message.from_user.id)
     except Exception as e:
