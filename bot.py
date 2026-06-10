@@ -10,6 +10,7 @@ from app.handlers.main import router as main_router
 from app.handlers.business import router as business_router
 from app.handlers.ai_assistant import router as ai_router
 from app.handlers.receipt import router as receipt_router
+from app.handlers.receipt import router as receipt_router
 from app.handlers.voice import router as voice_router
 from app.handlers.receipt import router as receipt_router
 from app.handlers.voice import router as voice_router
@@ -35,6 +36,7 @@ async def main():
     dp.include_router(main_router)
     dp.include_router(business_router)
     dp.include_router(ai_router)
+    dp.include_router(receipt_router)
     dp.include_router(receipt_router)
     dp.include_router(voice_router)
     dp.include_router(receipt_router)
