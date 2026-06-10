@@ -41,6 +41,22 @@ async def main():
     await get_pool()
     logger.info("Database pool initialized")
 
+    # Миграция ai_history
+    try:
+        from app.database import execute
+        await execute("""
+            CREATE TABLE IF NOT EXISTS ai_history (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                role VARCHAR(20) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await execute("CREATE INDEX IF NOT EXISTS idx_ai_history_user ON ai_history(user_id, created_at)")
+    except Exception as e:
+        logger.warning("Migration ai_history: " + str(e))
+
     scheduler = setup_scheduler(bot)
 
     try:
