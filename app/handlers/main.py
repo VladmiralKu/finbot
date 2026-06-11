@@ -844,3 +844,112 @@ async def cb_export_all(call: CallbackQuery):
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
+
+
+@router.message(F.text, StateFilter(default_state))
+async def msg_free_text(message: Message):
+    from app.database import get_user_tier, get_categories, add_transaction
+    from app.parser import parse_quick_input
+    from app.handlers.voice import parse_voice_to_transaction
+
+    # Игнорируем команды
+    if message.text.startswith('/'):
+        return
+
+    tier = await get_user_tier(message.from_user.id)
+
+    # Пробуем распарсить как быстрый ввод
+    parsed = parse_quick_input(message.text)
+    if parsed and parsed.get('amount'):
+        categories = await get_categories(message.from_user.id)
+        amount = parsed.get('amount')
+        type_ = parsed.get('type', 'expense')
+        hint = parsed.get('category_hint', '')
+
+        category_id = None
+        category_name = ''
+        for cat in categories:
+            if hint and hint.lower() in cat['name'].lower():
+                category_id = cat['id']
+                category_name = cat['name']
+                break
+        if not category_id:
+            for cat in categories:
+                if cat.get('type') == type_:
+                    category_id = cat['id']
+                    category_name = cat['name']
+                    break
+
+        if category_id:
+            await add_transaction(
+                message.from_user.id,
+                category_id=category_id,
+                amount=amount,
+                type_=type_,
+                kind=parsed.get('kind', 'variable'),
+                comment=parsed.get('comment', '')
+            )
+            sign = "-" if type_ == 'expense' else "+"
+            await message.answer(
+                "Записано: " + sign + str(int(amount)) + " руб. — " + category_name,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ])
+            )
+            return
+
+    # Если не распарсилось — пробуем через GPT
+    if tier == 'free':
+        return
+
+    thinking = await message.answer("Думаю...")
+    try:
+        tx_lines = await parse_voice_to_transaction(message.text)
+        categories = await get_categories(message.from_user.id)
+        added = []
+
+        for tx_str in tx_lines:
+            parsed = parse_quick_input(tx_str)
+            if not parsed or not parsed.get('amount'):
+                continue
+            amount = parsed.get('amount')
+            type_ = parsed.get('type', 'expense')
+            hint = parsed.get('category_hint', '')
+
+            category_id = None
+            category_name = ''
+            for cat in categories:
+                if hint and hint.lower() in cat['name'].lower():
+                    category_id = cat['id']
+                    category_name = cat['name']
+                    break
+            if not category_id:
+                for cat in categories:
+                    if cat.get('type') == type_:
+                        category_id = cat['id']
+                        category_name = cat['name']
+                        break
+
+            if category_id:
+                await add_transaction(
+                    message.from_user.id,
+                    category_id=category_id,
+                    amount=amount,
+                    type_=type_,
+                    kind=parsed.get('kind', 'variable'),
+                    comment=parsed.get('comment', '')
+                )
+                sign = "-" if type_ == 'expense' else "+"
+                added.append(sign + str(int(amount)) + " руб. — " + category_name)
+
+        await thinking.delete()
+        if added:
+            await message.answer(
+                "Записано: " + ", ".join(added),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ])
+            )
+    except Exception as e:
+        await thinking.delete()
+        await message.answer("Ошибка: " + str(e))
