@@ -18,8 +18,12 @@ async def transcribe_voice(audio_bytes: bytes) -> str:
         return response.json().get("text", "")
 
 
-async def parse_voice_to_transaction(text: str) -> list:
+async def parse_voice_to_transaction(text: str, categories: list = None) -> list:
     """Просим GPT извлечь все транзакции из текста."""
+    cat_list = ""
+    if categories:
+        cat_list = "\nДоступные категории: " + ", ".join([c["name"] for c in categories])
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://api.openai.com/v1/chat/completions",
@@ -36,9 +40,11 @@ async def parse_voice_to_transaction(text: str) -> list:
                         "content": (
                             "Извлеки ВСЕ транзакции из текста. Каждая на новой строке в формате: [+-]сумма категория\n"
                             "Расход = минус, доход = плюс.\n"
+                            "Категорию выбирай ТОЧНО из списка доступных категорий (если есть).\n"
+                            + cat_list + "\n"
                             "Примеры:\n"
-                            "- '500 на продукты и 300 на кофе' →\n-500 продукты\n-300 кофе\n"
-                            "- 'заработал 50000 и потратил 1000 на такси' →\n+50000 доходы\n-1000 такси\n"
+                            "- '500 на продукты и 300 на кофе' →\n-500 Еда / Продукты\n-300 Еда / Продукты\n"
+                            "- 'заработал 50000 и потратил 1000 на такси' →\n+50000 Фриланс\n-1000 Транспорт\n"
                             "Верни ТОЛЬКО строки транзакций, без пояснений."
                         )
                     },
