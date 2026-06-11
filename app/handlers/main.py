@@ -772,3 +772,72 @@ async def cb_chart_by_month(call: CallbackQuery):
         )
     except Exception as e:
         await call.message.answer("Ошибка: " + str(e))
+
+
+@router.callback_query(F.data == "export_all")
+async def cb_export_all(call: CallbackQuery):
+    from app.database import fetchall
+    import openpyxl
+    from io import BytesIO
+    from aiogram.types import BufferedInputFile
+
+    await call.answer("Готовлю выгрузку...")
+
+    wb = openpyxl.Workbook()
+
+    # 1. Транзакции
+    ws1 = wb.active
+    ws1.title = "Транзакции"
+    ws1.append(["ID", "Сумма", "Тип", "Вид", "Категория", "Комментарий", "Дата", "Создано"])
+    rows = await fetchall("""
+        SELECT t.id, t.amount, t.type_, t.kind, c.name as category,
+               t.comment, t.transaction_date, t.created_at
+        FROM transactions t
+        LEFT JOIN categories c ON t.category_id = c.id
+        WHERE t.user_id = %s
+        ORDER BY t.transaction_date DESC
+    """, (call.from_user.id,))
+    for r in rows:
+        ws1.append([r["id"], float(r["amount"]), r["type_"], r["kind"],
+                    r["category"], r["comment"], str(r["transaction_date"]), str(r["created_at"])])
+
+    # 2. Категории
+    ws2 = wb.create_sheet("Категории")
+    ws2.append(["ID", "Название", "Тип", "Вид"])
+    cats = await fetchall("SELECT id, name, type_, kind FROM categories WHERE user_id = %s", (call.from_user.id,))
+    for r in cats:
+        ws2.append([r["id"], r["name"], r["type_"], r["kind"]])
+
+    # 3. Заметки
+    ws3 = wb.create_sheet("Заметки")
+    ws3.append(["ID", "Текст", "Создано"])
+    notes = await fetchall("SELECT id, text, created_at FROM notes WHERE user_id = %s ORDER BY created_at DESC", (call.from_user.id,))
+    for r in notes:
+        ws3.append([r["id"], r["text"], str(r["created_at"])])
+
+    # 4. Цели
+    ws4 = wb.create_sheet("Цели")
+    ws4.append(["ID", "Текст", "Создано"])
+    goals = await fetchall("SELECT id, goal_text, created_at FROM user_goals WHERE user_id = %s ORDER BY created_at DESC", (call.from_user.id,))
+    for r in goals:
+        ws4.append([r["id"], r["goal_text"], str(r["created_at"])])
+
+    # 5. История ИИ
+    ws5 = wb.create_sheet("Диалоги ИИ")
+    ws5.append(["ID", "Роль", "Сообщение", "Дата"])
+    history = await fetchall("SELECT id, role, content, created_at FROM ai_history WHERE user_id = %s ORDER BY created_at", (call.from_user.id,))
+    for r in history:
+        ws5.append([r["id"], r["role"], r["content"], str(r["created_at"])])
+
+    # Сохраняем
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    await call.message.answer_document(
+        BufferedInputFile(buf.read(), filename="export_" + str(call.from_user.id) + ".xlsx"),
+        caption="Полная выгрузка базы данных",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )

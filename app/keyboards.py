@@ -25,8 +25,7 @@ def reports_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
         [InlineKeyboardButton(text="📊 Отчёт ДДС", callback_data="report_month")],
-        [InlineKeyboardButton(text="📝 Заметки", callback_data="notes_menu")],
-
+        [InlineKeyboardButton(text="📥 Выгрузить всю базу", callback_data="export_all")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
 
