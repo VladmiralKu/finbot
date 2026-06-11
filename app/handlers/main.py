@@ -823,11 +823,14 @@ async def cb_export_all(call: CallbackQuery):
         ws4.append([r["id"], r["goal_text"], str(r["created_at"])])
 
     # 5. История ИИ
-    ws5 = wb.create_sheet("Диалоги ИИ")
-    ws5.append(["ID", "Роль", "Сообщение", "Дата"])
-    history = await fetchall("SELECT id, role, content, created_at FROM ai_history WHERE user_id = %s ORDER BY created_at", (call.from_user.id,))
-    for r in history:
-        ws5.append([r["id"], r["role"], r["content"], str(r["created_at"])])
+    try:
+        ws5 = wb.create_sheet("Диалоги ИИ")
+        ws5.append(["ID", "Роль", "Сообщение", "Дата"])
+        history = await fetchall("SELECT id, role, content, created_at FROM ai_history WHERE user_id = %s ORDER BY created_at", (call.from_user.id,))
+        for r in history:
+            ws5.append([r["id"], r["role"], r["content"], str(r["created_at"])])
+    except Exception:
+        pass
 
     # Сохраняем
     buf = BytesIO()
