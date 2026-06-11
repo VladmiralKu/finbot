@@ -925,6 +925,12 @@ async def msg_free_text(message: Message):
                     break
             if not category_id:
                 for cat in categories:
+                    if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
+                        category_id = cat['id']
+                        category_name = cat['name']
+                        break
+            if not category_id:
+                for cat in categories:
                     if cat.get('type') == type_:
                         category_id = cat['id']
                         category_name = cat['name']
