@@ -550,10 +550,152 @@ async def cb_txlist(call: CallbackQuery):
         text,
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Удалить транзакцию", callback_data="delete_by_id")],
+            [InlineKeyboardButton(text="✏️ Изменить транзакцию", callback_data=f"edit_by_id:{year}:{month}")],
+            [InlineKeyboardButton(text="🗑 Удалить транзакцию", callback_data="delete_by_id")],
             [InlineKeyboardButton(text="Назад", callback_data="recent")],
         ])
     )
+
+
+# --- Редактирование транзакции ---
+
+class EditTxState(StatesGroup):
+    waiting_id = State()
+    waiting_field = State()
+    waiting_value = State()
+
+
+@router.callback_query(F.data.startswith("edit_by_id:"))
+async def cb_edit_by_id(call: CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    year, month = parts[1], parts[2]
+    await state.set_state(EditTxState.waiting_id)
+    await state.update_data(year=year, month=month)
+    await call.message.edit_text(
+        "Напиши номер транзакции для изменения (например: 42):",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data=f"txlist:{year}:{month}")]
+        ])
+    )
+
+
+@router.message(EditTxState.waiting_id)
+async def msg_edit_tx_id(message: Message, state: FSMContext):
+    try:
+        tx_id = int(message.text.strip().replace("#", ""))
+    except ValueError:
+        await message.answer("Введи число.")
+        return
+
+    tx = await fetchone(
+        """SELECT t.id, t.amount, t.type_, t.comment, t.transaction_date, c.name as cat_name
+           FROM transactions t LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.id = %s AND t.user_id = %s""",
+        (tx_id, message.from_user.id)
+    )
+    if not tx:
+        await message.answer("Транзакция не найдена.")
+        await state.clear()
+        return
+
+    await state.update_data(tx_id=tx_id)
+    await state.set_state(EditTxState.waiting_field)
+
+    text = (f"Транзакция #{tx['id']}:\n"
+            f"Сумма: {float(tx['amount']):,.0f} руб.\n"
+            f"Категория: {tx['cat_name']}\n"
+            f"Дата: {tx['transaction_date']}\n"
+            f"Комментарий: {tx['comment'] or '—'}\n\n"
+            f"Что изменить?")
+
+    await message.answer(
+        text,
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 Сумму", callback_data="edit_field:amount")],
+            [InlineKeyboardButton(text="📂 Категорию", callback_data="edit_field:category")],
+            [InlineKeyboardButton(text="📅 Дату", callback_data="edit_field:date")],
+            [InlineKeyboardButton(text="💬 Комментарий", callback_data="edit_field:comment")],
+            [InlineKeyboardButton(text="Отмена", callback_data="recent")],
+        ])
+    )
+
+
+@router.callback_query(F.data.startswith("edit_field:"), EditTxState.waiting_field)
+async def cb_edit_field(call: CallbackQuery, state: FSMContext):
+    field = call.data.split(":")[1]
+    await state.update_data(field=field)
+    await state.set_state(EditTxState.waiting_value)
+
+    prompts = {
+        "amount": "Введи новую сумму (например: 1500):",
+        "category": "Введи название категории:",
+        "date": "Введи новую дату в формате ДД.ММ.ГГГГ (например: 15.06.2026):",
+        "comment": "Введи новый комментарий (или /skip чтобы очистить):",
+    }
+    await call.message.edit_text(prompts[field], parse_mode=None)
+
+
+@router.message(EditTxState.waiting_value)
+async def msg_edit_tx_value(message: Message, state: FSMContext):
+    from app.database import get_categories
+    data = await state.get_data()
+    tx_id = data['tx_id']
+    field = data['field']
+    year = data.get('year', '')
+    month = data.get('month', '')
+    value = message.text.strip()
+
+    try:
+        if field == 'amount':
+            new_val = float(value.replace(',', '.'))
+            await execute("UPDATE transactions SET amount=%s WHERE id=%s AND user_id=%s",
+                         (new_val, tx_id, message.from_user.id))
+            result = f"Сумма изменена на {new_val:,.0f} руб."
+
+        elif field == 'category':
+            cats = await get_categories(message.from_user.id)
+            cat_id = None
+            for cat in cats:
+                if value.lower() in cat['name'].lower():
+                    cat_id = cat['id']
+                    break
+            if not cat_id:
+                await message.answer("Категория не найдена. Попробуй точнее.")
+                return
+            await execute("UPDATE transactions SET category_id=%s WHERE id=%s AND user_id=%s",
+                         (cat_id, tx_id, message.from_user.id))
+            result = f"Категория изменена."
+
+        elif field == 'date':
+            from datetime import datetime as dt
+            new_date = dt.strptime(value, "%d.%m.%Y").date()
+            await execute("UPDATE transactions SET transaction_date=%s WHERE id=%s AND user_id=%s",
+                         (new_date, tx_id, message.from_user.id))
+            result = f"Дата изменена на {new_date}."
+
+        elif field == 'comment':
+            new_comment = "" if value == "/skip" else value
+            await execute("UPDATE transactions SET comment=%s WHERE id=%s AND user_id=%s",
+                         (new_comment, tx_id, message.from_user.id))
+            result = "Комментарий обновлён."
+
+        else:
+            result = "Неизвестное поле."
+
+        await state.clear()
+        await message.answer(
+            "✅ " + result,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Назад к транзакциям", callback_data=f"txlist:{year}:{month}")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+
+    except Exception as e:
+        await state.clear()
+        await message.answer("Ошибка: " + str(e))
 
 
 # --- Удаление по номеру ---
