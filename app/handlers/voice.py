@@ -110,9 +110,14 @@ async def msg_voice(message: Message):
         await message.answer("Распознано: " + text)
 
         # Преобразуем в формат транзакций через GPT
-        tx_lines = await parse_voice_to_transaction(text)
         categories = await get_categories(message.from_user.id)
+        tx_lines = await parse_voice_to_transaction(text, categories)
         added = []
+
+        # Проверяем нужна ли конвертация валюты
+        usd_rate = None
+        if any(w in text.lower() for w in ['долларов', 'доллар', 'доллара', '$', 'usd']):
+            usd_rate = await get_usd_rate()
 
         for tx_str in tx_lines:
             parsed = parse_quick_input(tx_str)
@@ -191,5 +196,8 @@ async def msg_voice(message: Message):
                 await message.answer("Ошибка ИИ: " + str(e))
 
     except Exception as e:
-        await thinking.delete()
+        try:
+            await thinking.delete()
+        except Exception:
+            pass
         await message.answer("Ошибка: " + str(e))
