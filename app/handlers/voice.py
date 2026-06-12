@@ -111,7 +111,16 @@ async def msg_voice(message: Message):
                     category_id = cat['id']
                     category_name = cat['name']
                     break
+            # debug
+            await message.answer("hint=" + hint + " matched=" + category_name)
 
+            if not category_id:
+                # Сначала ищем "Прочие расходы"
+                for cat in categories:
+                    if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
+                        category_id = cat['id']
+                        category_name = cat['name']
+                        break
             if not category_id:
                 for cat in categories:
                     if cat.get('type') == type_:
