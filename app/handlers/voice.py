@@ -1,5 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import StateFilter
+from aiogram.fsm.state import default_state
 import httpx
 import os
 
@@ -75,7 +77,7 @@ async def parse_voice_to_transaction(text: str, categories: list = None) -> list
         return [line.strip() for line in result.split("\n") if line.strip()]
 
 
-@router.message(F.voice)
+@router.message(F.voice, StateFilter(default_state))
 async def msg_voice(message: Message):
     from app.database import get_user_tier, get_categories, add_transaction
     from app.parser import parse_quick_input
