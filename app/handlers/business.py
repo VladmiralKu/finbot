@@ -100,7 +100,7 @@ async def cb_notes_menu(call: CallbackQuery):
 async def cb_note_add(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteState.waiting_text)
     await call.message.edit_text(
-        "Напиши или надиктуй свою мысль:",
+        "Напиши свою мысль:",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
@@ -122,23 +122,6 @@ async def msg_note_text(message: Message, state: FSMContext):
     )
     await message.answer(
         "Заметка сохранена!",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
-            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-        ])
-    )
-
-
-@router.message(NoteState.waiting_text, F.voice)
-async def msg_note_voice(message: Message, state: FSMContext):
-    from app.database import execute
-    await state.clear()
-    await execute(
-        "INSERT INTO notes (user_id, text) VALUES (%s, %s)",
-        (message.from_user.id, "[Golosovaya zametka - " + message.date.strftime("%d.%m.%Y %H:%M") + "]")
-    )
-    await message.answer(
-        "Голосовая заметка сохранена! (расшифровка будет доступна в Premium)",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
