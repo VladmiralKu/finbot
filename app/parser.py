@@ -59,6 +59,18 @@ def parse_quick_input(text: str) -> dict:
 
     text = text.strip()
 
+    # Дата в начале текста: 15.05 или 15.05.2026
+    date_prefix = re.match(r'^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s+', text)
+    if date_prefix:
+        try:
+            day = int(date_prefix.group(1))
+            month = int(date_prefix.group(2))
+            year = int(date_prefix.group(3)) if date_prefix.group(3) else date.today().year
+            result['transaction_date'] = date(year, month, day)
+            text = text[date_prefix.end():]
+        except Exception:
+            pass
+
     # Сумма (обязательно)
     amount_match = re.match(r'^([+-]?\d+(?:[.,]\d+)?)', text)
     if not amount_match:
