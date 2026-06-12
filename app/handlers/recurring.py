@@ -170,3 +170,76 @@ async def cb_remind(call: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
+
+
+@router.callback_query(F.data.startswith("paid:"))
+async def cb_paid_recurring(call: CallbackQuery):
+    from app.database import fetchone, get_categories, add_transaction
+    parts = call.data.split(":")
+    payment_id = int(parts[1])
+    amount = float(parts[2])
+
+    # Получаем инфо о платеже
+    payment = await fetchone(
+        "SELECT name, user_id, kind FROM recurring_payments WHERE id = %s",
+        (payment_id,)
+    )
+    if not payment:
+        await call.answer("Платёж не найден.")
+        return
+
+    # Находим категорию
+    categories = await get_categories(call.from_user.id)
+    category_id = None
+    category_name = ''
+    for cat in categories:
+        if 'прочие' in cat['name'].lower() and cat.get('type') == 'expense':
+            category_id = cat['id']
+            category_name = cat['name']
+            break
+    if not category_id and categories:
+        for cat in categories:
+            if cat.get('type') == 'expense':
+                category_id = cat['id']
+                category_name = cat['name']
+                break
+
+    if category_id:
+        await add_transaction(
+            call.from_user.id,
+            category_id=category_id,
+            amount=amount,
+            type_='expense',
+            kind=payment['kind'] or 'fixed',
+            comment=payment['name']
+        )
+
+    await call.message.edit_text(
+        f"✅ <b>Оплачено!</b>\n\n"
+        f"📌 {payment['name']} — {amount:,.0f} ₽\n"
+        f"Транзакция записана.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
+
+
+@router.callback_query(F.data.startswith("postpone:"))
+async def cb_postpone_recurring(call: CallbackQuery):
+    from app.database import execute
+    from datetime import date, timedelta
+    payment_id = int(call.data.split(":")[1])
+
+    # Переносим на завтра — сбрасываем last_triggered_at
+    await execute(
+        "UPDATE recurring_payments SET last_triggered_at = NULL WHERE id = %s",
+        (payment_id,)
+    )
+
+    await call.message.edit_text(
+        "❌ Напомню завтра.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
