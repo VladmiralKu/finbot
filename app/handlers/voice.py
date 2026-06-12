@@ -111,8 +111,6 @@ async def msg_voice(message: Message):
                     category_id = cat['id']
                     category_name = cat['name']
                     break
-            # debug
-            await message.answer("hint=" + hint + " matched=" + category_name)
 
             if not category_id:
                 # Сначала ищем "Прочие расходы"
