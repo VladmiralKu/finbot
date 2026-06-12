@@ -18,6 +18,20 @@ async def transcribe_voice(audio_bytes: bytes) -> str:
         return response.json().get("text", "")
 
 
+async def get_usd_rate() -> float:
+    """Получаем курс доллара к рублю."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.exchangerate-api.com/v4/latest/USD",
+                timeout=5.0
+            )
+            data = response.json()
+            return data["rates"]["RUB"]
+    except Exception:
+        return 90.0  # фоллбек если API недоступен
+
+
 async def parse_voice_to_transaction(text: str, categories: list = None) -> list:
     """Просим GPT извлечь все транзакции из текста."""
     cat_list = ""
@@ -107,6 +121,14 @@ async def msg_voice(message: Message):
             type_ = parsed.get('type', 'expense')
             hint = parsed.get('category_hint', '')
 
+            # Конвертируем если нужно
+            if usd_rate and amount:
+                original = amount
+                amount = round(amount * usd_rate)
+                hint_currency = " (≈$" + str(int(original)) + ")"
+            else:
+                hint_currency = ""
+
             category_id = None
             category_name = ''
             for cat in categories:
@@ -139,7 +161,7 @@ async def msg_voice(message: Message):
                     comment=parsed.get('comment', '')
                 )
                 sign = "-" if type_ == 'expense' else "+"
-                added.append(sign + str(int(amount)) + " руб. — " + category_name)
+                added.append(sign + str(int(amount)) + " руб. — " + category_name + hint_currency)
 
         if added:
             await message.answer(
