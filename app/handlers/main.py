@@ -280,7 +280,7 @@ async def cb_settings(call: CallbackQuery):
 
 # --- Быстрый ввод ---
 
-@router.message(F.text.regexp(r'^[+-]?\d+'), StateFilter(default_state))
+@router.message(F.text.regexp(r'^[+-]?\d+(?![.\d])'), StateFilter(default_state))
 async def msg_quick_input(message: Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state:
@@ -637,7 +637,7 @@ async def cb_edit_field(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(prompts[field], parse_mode=None)
 
 
-@router.message(EditTxState.waiting_value)
+@router.message(EditTxState.waiting_value, F.text)
 async def msg_edit_tx_value(message: Message, state: FSMContext):
     from app.database import get_categories
     data = await state.get_data()
