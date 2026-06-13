@@ -50,9 +50,42 @@ async def cb_calendar(call: CallbackQuery):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Добавить платёж", callback_data="add_recurring")],
+        [InlineKeyboardButton(text="🗑 Удалить платёж", callback_data="delete_recurring_menu")],
         [InlineKeyboardButton(text="Назад", callback_data="main_menu")],
     ])
     await call.message.edit_text(text, parse_mode=None, reply_markup=kb)
+
+
+@router.callback_query(F.data == "delete_recurring_menu")
+async def cb_delete_recurring_menu(call: CallbackQuery):
+    payments = await get_recurring_payments(call.from_user.id)
+    if not payments:
+        await call.answer("Нет платежей для удаления.")
+        return
+
+    buttons = []
+    for p in payments:
+        label = f"🗑 {p[2]} — {float(p[3]):,.0f} руб."
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"delete_recurring:{p[0]}")])
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="calendar")])
+
+    await call.message.edit_text(
+        "Выбери платёж для удаления:",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@router.callback_query(F.data.startswith("delete_recurring:"))
+async def cb_delete_recurring(call: CallbackQuery):
+    from app.database import execute
+    payment_id = int(call.data.split(":")[1])
+    await execute(
+        "DELETE FROM recurring_payments WHERE id = %s AND user_id = %s",
+        (payment_id, call.from_user.id)
+    )
+    await call.answer("Платёж удалён.")
+    await cb_calendar(call)
 
 
 @router.callback_query(F.data == "add_recurring")
