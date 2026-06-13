@@ -597,3 +597,31 @@ async def get_pnl_report(user_id, year, month):
 
     result['pct'] = pct
     return result
+
+
+async def get_ai_history(user_id: int, limit: int = 20) -> list:
+    try:
+        rows = await fetchall(
+            "SELECT role, content FROM ai_history WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            (user_id, limit)
+        )
+        return list(reversed([{"role": r["role"], "content": r["content"]} for r in rows]))
+    except Exception:
+        return []
+
+
+async def save_ai_message(user_id: int, role: str, content: str):
+    try:
+        await execute(
+            "INSERT INTO ai_history (user_id, role, content) VALUES (%s, %s, %s)",
+            (user_id, role, content)
+        )
+    except Exception:
+        pass
+
+
+async def clear_ai_history(user_id: int):
+    try:
+        await execute("DELETE FROM ai_history WHERE user_id = %s", (user_id,))
+    except Exception:
+        pass
