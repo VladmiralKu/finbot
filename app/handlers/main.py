@@ -1138,3 +1138,76 @@ async def msg_free_text(message: Message):
     except Exception as e:
         await thinking.delete()
         await message.answer("Ошибка: " + str(e))
+
+
+@router.message(Command("category"))
+async def cmd_category(message: Message):
+    from app.database import get_categories, execute
+    args = message.text.strip()[len("/category"):].strip()
+
+    if not args or args == "list":
+        cats = await get_categories(message.from_user.id)
+        if not cats:
+            await message.answer("Категорий нет.")
+            return
+        income = [c for c in cats if c.get('type') == 'income']
+        expense = [c for c in cats if c.get('type') == 'expense']
+        text = "📂 Твои категории:\n\n"
+        text += "💰 Доходы:\n"
+        for c in income:
+            text += f"  • {c['name']}\n"
+        text += "\n💸 Расходы:\n"
+        for c in expense:
+            text += f"  • {c['name']}\n"
+        text += "\nКоманды:\n/category rename \"Старое\" \"Новое\"\n/category add \"Название\" expense\n/category add \"Название\" income\n/category delete \"Название\""
+        await message.answer(text, parse_mode=None)
+        return
+
+    # rename
+    if args.startswith("rename"):
+        import re
+        m = re.findall(r'"([^"]+)"', args)
+        if len(m) < 2:
+            await message.answer('Формат: /category rename "Старое" "Новое"')
+            return
+        old_name, new_name = m[0], m[1]
+        result = await execute(
+            "UPDATE categories SET name=%s WHERE name=%s AND user_id=%s",
+            (new_name, old_name, message.from_user.id)
+        )
+        await message.answer(f'Категория "{old_name}" → "{new_name}"' if result else f'Категория "{old_name}" не найдена.')
+        return
+
+    # add
+    if args.startswith("add"):
+        import re
+        m = re.findall(r'"([^"]+)"', args)
+        type_ = 'expense' if 'income' not in args else 'income'
+        if not m:
+            await message.answer('Формат: /category add "Название" expense')
+            return
+        name = m[0]
+        await execute(
+            "INSERT INTO categories (user_id, name, type_, kind) VALUES (%s, %s, %s, 'variable') ON CONFLICT DO NOTHING",
+            (message.from_user.id, name, type_)
+        )
+        type_ru = "доход" if type_ == 'income' else "расход"
+        await message.answer(f'Категория "{name}" ({type_ru}) добавлена.')
+        return
+
+    # delete
+    if args.startswith("delete"):
+        import re
+        m = re.findall(r'"([^"]+)"', args)
+        if not m:
+            await message.answer('Формат: /category delete "Название"')
+            return
+        name = m[0]
+        await execute(
+            "DELETE FROM categories WHERE name=%s AND user_id=%s",
+            (name, message.from_user.id)
+        )
+        await message.answer(f'Категория "{name}" удалена.')
+        return
+
+    await message.answer("Неизвестная команда. Используй: list, rename, add, delete")
