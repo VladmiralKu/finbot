@@ -608,11 +608,16 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
     await state.update_data(tx_id=tx_id)
     await state.set_state(EditTxState.waiting_field)
 
-    text = (f"Транзакция #{tx['id']}:\n"
-            f"Сумма: {float(tx['amount']):,.0f} руб.\n"
-            f"Категория: {tx['cat_name'] or '—'}\n"
-            f"Дата: {tx['transaction_date']}\n"
-            f"Комментарий: {tx['comment'] or '—'}\n\n"
+    tx_id_val = tx['id']
+    tx_amount = float(tx['amount'])
+    tx_cat = tx['cat_name'] or '—'
+    tx_date = tx['transaction_date']
+    tx_comment = tx['comment'] or '—'
+    text = (f"Транзакция #{tx_id_val}\n"
+            f"Сумма: {tx_amount:,.0f} руб.\n"
+            f"Категория: {tx_cat}\n"
+            f"Дата: {tx_date}\n"
+            f"Комментарий: {tx_comment}\n\n"
             f"Что изменить?")
 
     await message.answer(
