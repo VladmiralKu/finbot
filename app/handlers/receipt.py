@@ -99,11 +99,41 @@ async def msg_photo_receipt(message: Message):
             if line.startswith("TRANSACTION:"):
                 tx_str = line.replace("TRANSACTION:", "").strip()
                 try:
-                    parsed = parse_quick_input(tx_str, categories)
-                    if parsed:
-                        tx_id = await add_transaction(message.from_user.id, **parsed)
-                        sign = "-" if parsed.get('type') == 'expense' else "+"
-                        added.append(sign + str(parsed.get('amount', '')) + " " + str(parsed.get('category_name', '')))
+                    parsed = parse_quick_input(tx_str)
+                    if parsed and parsed.get('amount'):
+                        amount = parsed['amount']
+                        type_ = parsed.get('type', 'expense')
+                        hint = parsed.get('category_hint', '')
+                        category_id = None
+                        category_name = ''
+                        for cat in categories:
+                            if hint and hint.lower() in cat['name'].lower():
+                                category_id = cat['id']
+                                category_name = cat['name']
+                                break
+                        if not category_id:
+                            for cat in categories:
+                                if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
+                                    category_id = cat['id']
+                                    category_name = cat['name']
+                                    break
+                        if not category_id:
+                            for cat in categories:
+                                if cat.get('type') == type_:
+                                    category_id = cat['id']
+                                    category_name = cat['name']
+                                    break
+                        if category_id:
+                            await add_transaction(
+                                message.from_user.id,
+                                category_id=category_id,
+                                amount=amount,
+                                type_=type_,
+                                kind='variable',
+                                comment=parsed.get('comment', '')
+                            )
+                            sign = "-" if type_ == 'expense' else "+"
+                            added.append(sign + str(int(amount)) + " руб. — " + category_name)
                 except Exception:
                     pass
 
