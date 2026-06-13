@@ -620,10 +620,24 @@ async def cb_edit_pick(call: CallbackQuery, state: FSMContext):
     await state.update_data(tx_id=tx_id, year=year, month=month)
     await state.set_state(EditTxState.waiting_value)
 
-    sign = "-" if tx['type'] == 'expense' else "+"
-    current = (sign + str(int(float(tx['amount']))) + " " +
-               str(tx['cat_name'] or '') + " " +
-               str(tx['comment'] or ''))
+    # fetchone возвращает dict или tuple — обрабатываем оба
+    if isinstance(tx, dict):
+        tx_type = tx.get('type', 'expense')
+        tx_amount = tx.get('amount', 0)
+        tx_cat = tx.get('cat_name', '')
+        tx_comment = tx.get('comment', '')
+        tx_date = tx.get('transaction_date', '')
+    else:
+        tx_type = tx[2]
+        tx_amount = tx[1]
+        tx_cat = tx[5] if len(tx) > 5 else ''
+        tx_comment = tx[3] if len(tx) > 3 else ''
+        tx_date = tx[4] if len(tx) > 4 else ''
+
+    sign = "-" if tx_type == 'expense' else "+"
+    current = (sign + str(int(float(tx_amount))) + " " +
+               str(tx_cat or '') + " " +
+               str(tx_comment or ''))
 
     await call.message.edit_text(
         "Текущая транзакция: " + current.strip() + chr(10) + chr(10) +

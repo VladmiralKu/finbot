@@ -156,7 +156,7 @@ async def log_ai_usage(user_id: int):
 
 
 async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
-    from app.parser import parse_transaction
+    from app.parser import parse_quick_input
     from app.database import get_categories, add_transaction, execute
     actions_log = ""
     clean_lines = []
@@ -166,10 +166,31 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
             tx_str = line.replace("TRANSACTION:", "").strip()
             try:
                 categories = await get_categories(user_id)
-                parsed = parse_transaction(tx_str, categories)
-                if parsed:
-                    await add_transaction(user_id, **parsed)
-                    actions_log += "\nТранзакция внесена!"
+                parsed = parse_quick_input(tx_str)
+                if parsed and parsed.get('amount'):
+                    hint = parsed.get('category_hint', '')
+                    type_ = parsed.get('type', 'expense')
+                    category_id = None
+                    for cat in categories:
+                        if hint and hint.lower() in cat['name'].lower():
+                            category_id = cat['id']
+                            type_ = cat.get('type', type_)
+                            break
+                    if not category_id:
+                        for cat in categories:
+                            if cat.get('type') == type_:
+                                category_id = cat['id']
+                                break
+                    if category_id:
+                        await add_transaction(
+                            user_id,
+                            category_id=category_id,
+                            amount=parsed['amount'],
+                            type_=type_,
+                            kind=parsed.get('kind', 'variable'),
+                            comment=parsed.get('comment', '')
+                        )
+                        actions_log += "\nТранзакция внесена!"
             except Exception as e:
                 actions_log += "\nОшибка внесения транзакции: " + str(e)
         elif line.startswith("GOAL:"):
