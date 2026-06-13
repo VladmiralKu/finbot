@@ -344,7 +344,7 @@ async def msg_ai_chat(message: Message, state: FSMContext):
 
     limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
     await message.answer(
-        clean_text + actions_log + "\n\n[" + limit_str + "]",
+        "🗣️ " + clean_text + actions_log + "\n\n[" + limit_str + "]",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
