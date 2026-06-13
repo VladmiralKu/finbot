@@ -284,9 +284,21 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             await thinking.edit_text("Не удалось распознать голос.")
             return
         await thinking.edit_text("Распознано: " + text)
-        # Передаём текст в основной хендлер ИИ
-        message.text = text
-        await msg_ai_chat(message, state)
+        # Обрабатываем напрямую как ИИ-запрос
+        from app.database import get_ai_history, save_ai_message
+        history = await get_ai_history(message.from_user.id)
+        ai_text, new_history = await get_ai_response(message.from_user.id, text, history)
+        await save_ai_message(message.from_user.id, 'user', text)
+        await save_ai_message(message.from_user.id, 'assistant', ai_text)
+        await log_ai_usage(message.from_user.id)
+        clean_text, actions_log = await process_actions(message.from_user.id, ai_text)
+        await message.answer(
+            clean_text + actions_log,
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
+            ])
+        )
     except Exception as e:
         try:
             await thinking.delete()
