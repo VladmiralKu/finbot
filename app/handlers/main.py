@@ -560,19 +560,63 @@ async def cb_txlist(call: CallbackQuery):
 # --- Редактирование транзакции ---
 
 class EditTxState(StatesGroup):
-    waiting_id = State()
-    waiting_field = State()
     waiting_value = State()
 
 
 @router.callback_query(F.data.startswith("edit_by_id:"))
 async def cb_edit_by_id(call: CallbackQuery, state: FSMContext):
+    from app.database import get_transactions_by_month
     parts = call.data.split(":")
-    year, month = parts[1], parts[2]
-    await state.set_state(EditTxState.waiting_id)
-    await state.update_data(year=year, month=month)
+    year, month = int(parts[1]), int(parts[2])
+
+    txs = await get_transactions_by_month(call.from_user.id, year, month)
+    if not txs:
+        await call.answer("Нет транзакций за этот месяц.")
+        return
+
+    buttons = []
+    for tx in txs[:20]:
+        tx_id, date, amount, type_, comment, cat_name, wallet = tx
+        sign = "-" if type_ == "expense" else "+"
+        label = f"#{tx_id} {date.strftime('%d.%m')} {sign}{int(float(amount))} {cat_name or ''}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"edit_pick:{tx_id}:{year}:{month}")])
+
+    buttons.append([InlineKeyboardButton(text="Отмена", callback_data=f"txlist:{year}:{month}")])
     await call.message.edit_text(
-        "Напиши номер транзакции для изменения (например: 42):",
+        "Выбери транзакцию для изменения:",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@router.callback_query(F.data.startswith("edit_pick:"))
+async def cb_edit_pick(call: CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    tx_id, year, month = int(parts[1]), parts[2], parts[3]
+
+    tx = await fetchone(
+        "SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, c.name as cat_name "
+        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
+        "WHERE t.id = %s AND t.user_id = %s",
+        (tx_id, call.from_user.id)
+    )
+    if not tx:
+        await call.answer("Транзакция не найдена.")
+        return
+
+    await state.update_data(tx_id=tx_id, year=year, month=month)
+    await state.set_state(EditTxState.waiting_value)
+
+    sign = "-" if tx['type'] == 'expense' else "+"
+    current = (sign + str(int(float(tx['amount']))) + " " +
+               str(tx['cat_name'] or '') + " " +
+               str(tx['comment'] or ''))
+
+    await call.message.edit_text(
+        "Текущая транзакция: " + current.strip() + chr(10) + chr(10) +
+        "Введи новые данные в формате:" + chr(10) +
+        "ДД.ММ -500 Категория комментарий" + chr(10) + chr(10) +
+        "Пример: 13.06 -500 Еда кофе с молоком",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data=f"txlist:{year}:{month}")]
@@ -580,121 +624,56 @@ async def cb_edit_by_id(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(EditTxState.waiting_id)
-async def msg_edit_tx_id(message: Message, state: FSMContext):
-    if not message.text:
-        return
-    raw = message.text.strip().replace("#", "").replace(" ", "")
-    if not raw.isdigit():
-        await message.answer("Введи число (например: 42).")
-        return
-    tx_id = int(raw)
-    tx = await fetchone(
-        "SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, c.name as cat_name "
-        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
-        "WHERE t.id = %s AND t.user_id = %s",
-        (tx_id, message.from_user.id)
-    )
-    if not tx:
-        await message.answer("Транзакция #" + str(tx_id) + " не найдена.")
-        await state.clear()
-        return
-    await state.update_data(tx_id=tx_id)
-    await state.set_state(EditTxState.waiting_field)
-    lines = [
-        "Транзакция #" + str(tx['id']),
-        "Сумма: " + str(int(float(tx['amount']))) + " руб.",
-        "Категория: " + str(tx['cat_name'] or '-'),
-        "Дата: " + str(tx['transaction_date']),
-        "Комментарий: " + str(tx['comment'] or '-'),
-        "",
-        "Что изменить?",
-    ]
-    txt = chr(10).join(lines)
-    await message.answer(
-        txt,
-        parse_mode=None,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💰 Сумму", callback_data="edit_field:amount")],
-            [InlineKeyboardButton(text="📂 Категорию", callback_data="edit_field:category")],
-            [InlineKeyboardButton(text="📅 Дату", callback_data="edit_field:date")],
-            [InlineKeyboardButton(text="💬 Комментарий", callback_data="edit_field:comment")],
-            [InlineKeyboardButton(text="Отмена", callback_data="recent")],
-        ])
-    )
-
-
-@router.callback_query(F.data.startswith("edit_field:"), EditTxState.waiting_field)
-async def cb_edit_field(call: CallbackQuery, state: FSMContext):
-    field = call.data.split(":")[1]
-    await state.update_data(field=field)
-    await state.set_state(EditTxState.waiting_value)
-
-    prompts = {
-        "amount": "Введи новую сумму (например: 1500):",
-        "category": "Введи название категории:",
-        "date": "Введи новую дату в формате ДД.ММ.ГГГГ (например: 15.06.2026):",
-        "comment": "Введи новый комментарий (или /skip чтобы очистить):",
-    }
-    await call.message.edit_text(prompts[field], parse_mode=None)
-
-
 @router.message(EditTxState.waiting_value, F.text)
 async def msg_edit_tx_value(message: Message, state: FSMContext):
     from app.database import get_categories
+    from app.parser import parse_quick_input
     data = await state.get_data()
     tx_id = data['tx_id']
-    field = data['field']
     year = data.get('year', '')
     month = data.get('month', '')
-    value = message.text.strip()
+
+    parsed = parse_quick_input(message.text)
+    if not parsed or not parsed.get('amount'):
+        await message.answer("Не удалось распознать. Попробуй формат: 13.06 -500 Еда кофе")
+        return
+
+    amount = parsed['amount']
+    type_ = parsed['type']
+    date = parsed.get('transaction_date')
+    hint = parsed.get('category_hint', '')
+    comment = parsed.get('comment', '')
+
+    cats = await get_categories(message.from_user.id)
+    category_id = None
+    for cat in cats:
+        if hint and hint.lower() in cat['name'].lower():
+            category_id = cat['id']
+            break
+    if not category_id:
+        for cat in cats:
+            if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
+                category_id = cat['id']
+                break
+    if not category_id:
+        for cat in cats:
+            if cat.get('type') == type_:
+                category_id = cat['id']
+                break
 
     try:
-        if field == 'amount':
-            new_val = float(value.replace(',', '.'))
-            await execute("UPDATE transactions SET amount=%s WHERE id=%s AND user_id=%s",
-                         (new_val, tx_id, message.from_user.id))
-            result = f"Сумма изменена на {new_val:,.0f} руб."
-
-        elif field == 'category':
-            cats = await get_categories(message.from_user.id)
-            cat_id = None
-            for cat in cats:
-                if value.lower() in cat['name'].lower():
-                    cat_id = cat['id']
-                    break
-            if not cat_id:
-                await message.answer("Категория не найдена. Попробуй точнее.")
-                return
-            await execute("UPDATE transactions SET category_id=%s WHERE id=%s AND user_id=%s",
-                         (cat_id, tx_id, message.from_user.id))
-            result = f"Категория изменена."
-
-        elif field == 'date':
-            from datetime import datetime as dt
-            new_date = dt.strptime(value, "%d.%m.%Y").date()
-            await execute("UPDATE transactions SET transaction_date=%s WHERE id=%s AND user_id=%s",
-                         (new_date, tx_id, message.from_user.id))
-            result = f"Дата изменена на {new_date}."
-
-        elif field == 'comment':
-            new_comment = "" if value == "/skip" else value
-            await execute("UPDATE transactions SET comment=%s WHERE id=%s AND user_id=%s",
-                         (new_comment, tx_id, message.from_user.id))
-            result = "Комментарий обновлён."
-
-        else:
-            result = "Неизвестное поле."
-
+        await execute(
+            "UPDATE transactions SET amount=%s, type=%s, category_id=%s, comment=%s, transaction_date=%s WHERE id=%s AND user_id=%s",
+            (amount, type_, category_id, comment, date, tx_id, message.from_user.id)
+        )
         await state.clear()
         await message.answer(
-            "✅ " + result,
+            "Транзакция обновлена.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Назад к транзакциям", callback_data=f"txlist:{year}:{month}")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ])
         )
-
     except Exception as e:
         await state.clear()
         await message.answer("Ошибка: " + str(e))
