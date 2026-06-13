@@ -293,7 +293,7 @@ async def msg_ai_voice(message: Message, state: FSMContext):
         await log_ai_usage(message.from_user.id)
         clean_text, actions_log = await process_actions(message.from_user.id, ai_text)
         await message.answer(
-            clean_text + actions_log,
+            "🗣️ " + clean_text + actions_log,
             parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
