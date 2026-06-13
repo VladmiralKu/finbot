@@ -602,18 +602,16 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
     tx = rows[0]
     await state.update_data(tx_id=tx_id)
     await state.set_state(EditTxState.waiting_field)
-    txt = ("Транзакция #" + str(tx['id']) + "
-"
-           "Сумма: " + str(int(float(tx['amount']))) + " руб.
-"
-           "Категория: " + str(tx['cat_name'] or '—') + "
-"
-           "Дата: " + str(tx['transaction_date']) + "
-"
-           "Комментарий: " + str(tx['comment'] or '—') + "
-
-"
-           "Что изменить?")
+    lines = [
+        "Транзакция #" + str(tx['id']),
+        "Сумма: " + str(int(float(tx['amount']))) + " руб.",
+        "Категория: " + str(tx['cat_name'] or '-'),
+        "Дата: " + str(tx['transaction_date']),
+        "Комментарий: " + str(tx['comment'] or '-'),
+        "",
+        "Что изменить?",
+    ]
+    txt = chr(10).join(lines)
     await message.answer(
         txt,
         parse_mode=None,
