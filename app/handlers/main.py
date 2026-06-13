@@ -582,47 +582,40 @@ async def cb_edit_by_id(call: CallbackQuery, state: FSMContext):
 
 @router.message(EditTxState.waiting_id)
 async def msg_edit_tx_id(message: Message, state: FSMContext):
-    await message.answer("DEBUG edit: " + str(message.text))
-    try:
-        tx_id = int(message.text.strip().replace("#", ""))
-        await message.answer("DEBUG tx_id: " + str(tx_id))
-    except ValueError as e:
-        await message.answer("Введи число. err: " + str(e))
+    if not message.text:
         return
-
-    try:
-        tx = await fetchone(
-            """SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, c.name as cat_name
-               FROM transactions t LEFT JOIN categories c ON t.category_id = c.id
-               WHERE t.id = %s AND t.user_id = %s""",
-            (tx_id, message.from_user.id)
-        )
-    except Exception as e:
-        await message.answer("Ошибка: " + str(e))
+    raw = message.text.strip().replace("#", "").replace(" ", "")
+    if not raw.isdigit():
+        await message.answer("Введи число (например: 42).")
+        return
+    tx_id = int(raw)
+    rows = await fetchall(
+        "SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, c.name as cat_name "
+        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
+        "WHERE t.id = %s AND t.user_id = %s",
+        (tx_id, message.from_user.id)
+    )
+    if not rows:
+        await message.answer("Транзакция #" + str(tx_id) + " не найдена.")
         await state.clear()
         return
-    if not tx:
-        await message.answer("Транзакция #" + str(tx_id) + " не найдена для user " + str(message.from_user.id))
-        await state.clear()
-        return
-
+    tx = rows[0]
     await state.update_data(tx_id=tx_id)
     await state.set_state(EditTxState.waiting_field)
+    txt = ("Транзакция #" + str(tx['id']) + "
+"
+           "Сумма: " + str(int(float(tx['amount']))) + " руб.
+"
+           "Категория: " + str(tx['cat_name'] or '—') + "
+"
+           "Дата: " + str(tx['transaction_date']) + "
+"
+           "Комментарий: " + str(tx['comment'] or '—') + "
 
-    tx_id_val = tx['id']
-    tx_amount = float(tx['amount'])
-    tx_cat = tx['cat_name'] or '—'
-    tx_date = tx['transaction_date']
-    tx_comment = tx['comment'] or '—'
-    text = (f"Транзакция #{tx_id_val}\n"
-            f"Сумма: {tx_amount:,.0f} руб.\n"
-            f"Категория: {tx_cat}\n"
-            f"Дата: {tx_date}\n"
-            f"Комментарий: {tx_comment}\n\n"
-            f"Что изменить?")
-
+"
+           "Что изменить?")
     await message.answer(
-        text,
+        txt,
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💰 Сумму", callback_data="edit_field:amount")],
