@@ -595,9 +595,11 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
            WHERE t.id = %s AND t.user_id = %s""",
         (tx_id, message.from_user.id)
     )
-    # debug
-    all_txs = await fetchall("SELECT id, user_id FROM transactions WHERE id = %s", (tx_id,))
-    await message.answer("DEBUG tx: " + str(all_txs))
+    try:
+        all_txs = await fetchall("SELECT id, user_id FROM transactions WHERE id = %s", (tx_id,))
+        await message.answer("DEBUG tx: " + str(all_txs))
+    except Exception as e:
+        await message.answer("DEBUG fetchall error: " + str(e))
     if not tx:
         await message.answer("Транзакция #" + str(tx_id) + " не найдена для user " + str(message.from_user.id))
         await state.clear()
