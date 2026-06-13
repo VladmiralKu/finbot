@@ -565,25 +565,38 @@ class EditTxState(StatesGroup):
 
 @router.callback_query(F.data.startswith("edit_by_id:"))
 async def cb_edit_by_id(call: CallbackQuery, state: FSMContext):
-    from app.database import get_transactions_by_month
     parts = call.data.split(":")
     year, month = int(parts[1]), int(parts[2])
+    offset = int(parts[3]) if len(parts) > 3 else 0
+    await show_edit_list(call, year, month, offset)
 
+
+async def show_edit_list(call, year, month, offset=0):
+    from app.database import get_transactions_by_month
     txs = await get_transactions_by_month(call.from_user.id, year, month)
     if not txs:
         await call.answer("Нет транзакций за этот месяц.")
         return
 
+    page = txs[offset:offset+20]
     buttons = []
-    for tx in txs[:20]:
+    for tx in page:
         tx_id, date, amount, type_, comment, cat_name, wallet = tx
         sign = "-" if type_ == "expense" else "+"
         label = f"#{tx_id} {date.strftime('%d.%m')} {sign}{int(float(amount))} {cat_name or ''}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=f"edit_pick:{tx_id}:{year}:{month}")])
 
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(text="◀ Назад", callback_data=f"edit_by_id:{year}:{month}:{offset-20}"))
+    if offset + 20 < len(txs):
+        nav.append(InlineKeyboardButton(text="Ещё ▶", callback_data=f"edit_by_id:{year}:{month}:{offset+20}"))
+    if nav:
+        buttons.append(nav)
+
     buttons.append([InlineKeyboardButton(text="Отмена", callback_data=f"txlist:{year}:{month}")])
     await call.message.edit_text(
-        "Выбери транзакцию для изменения:",
+        f"Выбери транзакцию ({offset+1}-{min(offset+20, len(txs))} из {len(txs)}):",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
@@ -646,10 +659,15 @@ async def msg_edit_tx_value(message: Message, state: FSMContext):
 
     cats = await get_categories(message.from_user.id)
     category_id = None
+    matched_cat = None
     for cat in cats:
         if hint and hint.lower() in cat['name'].lower():
             category_id = cat['id']
+            matched_cat = cat
             break
+    # Если категория найдена — берём тип из неё
+    if matched_cat:
+        type_ = matched_cat.get('type', type_)
     if not category_id:
         for cat in cats:
             if 'прочие' in cat['name'].lower() and cat.get('type') == type_:

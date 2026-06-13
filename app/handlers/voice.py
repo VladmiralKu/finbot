@@ -142,6 +142,7 @@ async def msg_voice(message: Message):
                 if hint and hint.lower() in cat['name'].lower():
                     category_id = cat['id']
                     category_name = cat['name']
+                    type_ = cat.get('type', type_)
                     break
 
             if not category_id:
