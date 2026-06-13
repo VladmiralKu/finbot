@@ -182,11 +182,13 @@ async def cb_report_by_month(call: CallbackQuery):
     all_cats = await get_categories(call.from_user.id)
     expense_cats = {cat['name']: 0.0 for cat in all_cats if cat.get('type') == 'expense'}
 
-    # Заполняем суммами из breakdown
+    # Заполняем суммами и kind из breakdown
+    expense_kinds = {cat['name']: 'variable' for cat in all_cats if cat.get('type') == 'expense'}
     for row in breakdown:
         name = row['name']
         if name in expense_cats:
             expense_cats[name] = float(row['total'])
+            expense_kinds[name] = row['kind']
 
     # Сортируем по убыванию
     sorted_cats = sorted(expense_cats.items(), key=lambda x: x[1], reverse=True)
@@ -195,7 +197,8 @@ async def cb_report_by_month(call: CallbackQuery):
         text += "📋 <b>Расходы по категориям:</b>\n"
         for name, total in sorted_cats:
             pct = (total / income * 100) if income else 0
-            text += f"  🛒 {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
+            icon = "🔒" if expense_kinds.get(name) == 'fixed' else "🛒"
+            text += f"  {icon} {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
 
     # Добавляем % к остатку
     text = text.replace(
