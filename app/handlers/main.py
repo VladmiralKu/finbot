@@ -591,14 +591,13 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
 
     try:
         tx = await fetchone(
-            """SELECT t.id, t.amount, t.type_, t.comment, t.transaction_date, c.name as cat_name
+            """SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, c.name as cat_name
                FROM transactions t LEFT JOIN categories c ON t.category_id = c.id
                WHERE t.id = %s AND t.user_id = %s""",
             (tx_id, message.from_user.id)
         )
-        await message.answer("DEBUG fetchone ok: " + str(tx))
     except Exception as e:
-        await message.answer("DEBUG fetchone error: " + str(e))
+        await message.answer("Ошибка: " + str(e))
         await state.clear()
         return
     if not tx:
@@ -611,7 +610,7 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
 
     text = (f"Транзакция #{tx['id']}:\n"
             f"Сумма: {float(tx['amount']):,.0f} руб.\n"
-            f"Категория: {tx['cat_name']}\n"
+            f"Категория: {tx['cat_name'] or '—'}\n"
             f"Дата: {tx['transaction_date']}\n"
             f"Комментарий: {tx['comment'] or '—'}\n\n"
             f"Что изменить?")
