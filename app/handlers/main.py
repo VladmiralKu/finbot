@@ -173,11 +173,35 @@ async def cb_report_by_month(call: CallbackQuery):
         f"{'✅' if summary['balance'] >= 0 else '🔴'} Остаток: "
         f"<b>{summary['balance']:+,.0f} ₽</b>\n\n"
     )
-    if breakdown:
-        text += "📋 <b>Топ расходов:</b>\n"
-        for row in breakdown[:6]:
-            icon = "🔒" if row["kind"] == "fixed" else "🛒"
-            text += f"  {icon} {row['name']}: {float(row['total']):,.0f} ₽\n"
+    # Все расходные категории с % от доходов
+    income = summary['income'] if summary['income'] else 1
+    balance = summary['balance']
+    balance_pct = (balance / income * 100) if income else 0
+
+    # Получаем все категории пользователя
+    all_cats = await get_categories(call.from_user.id)
+    expense_cats = {cat['name']: 0.0 for cat in all_cats if cat.get('type') == 'expense'}
+
+    # Заполняем суммами из breakdown
+    for row in breakdown:
+        name = row['name']
+        if name in expense_cats:
+            expense_cats[name] = float(row['total'])
+
+    # Сортируем по убыванию
+    sorted_cats = sorted(expense_cats.items(), key=lambda x: x[1], reverse=True)
+
+    if sorted_cats:
+        text += "📋 <b>Расходы по категориям:</b>\n"
+        for name, total in sorted_cats:
+            pct = (total / income * 100) if income else 0
+            text += f"  🛒 {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
+
+    # Добавляем % к остатку
+    text = text.replace(
+        f"<b>{balance:+,.0f} ₽</b>",
+        f"<b>{balance:+,.0f} ₽ ({balance_pct:.0f}%)</b>"
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📈 График", callback_data="chart:" + str(year) + ":" + str(month))],
         [InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant")],
