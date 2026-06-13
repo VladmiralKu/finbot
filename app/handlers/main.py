@@ -596,7 +596,7 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
         (tx_id, message.from_user.id)
     )
     if not tx:
-        await message.answer("Транзакция не найдена.")
+        await message.answer("Транзакция #" + str(tx_id) + " не найдена для user " + str(message.from_user.id))
         await state.clear()
         return
 
