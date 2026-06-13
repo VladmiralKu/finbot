@@ -585,8 +585,9 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
     await message.answer("DEBUG edit: " + str(message.text))
     try:
         tx_id = int(message.text.strip().replace("#", ""))
-    except ValueError:
-        await message.answer("Введи число.")
+        await message.answer("DEBUG tx_id: " + str(tx_id))
+    except ValueError as e:
+        await message.answer("Введи число. err: " + str(e))
         return
 
     try:
