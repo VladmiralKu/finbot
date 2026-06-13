@@ -170,6 +170,8 @@ async def cb_report_by_month(call: CallbackQuery):
         f"🔒 Постоянные расходы: <b>{summary['expense_fixed']:,.0f} ₽</b>\n"
         f"🛒 Переменные расходы: <b>{summary['expense_variable']:,.0f} ₽</b>\n"
         f"━━━━━━━━━━━━━━━\n"
+        f"{'✅' if summary['balance'] >= 0 else '🔴'} Остаток: "
+        f"<b>{summary['balance']:+,.0f} ₽</b>\n\n"
     )
     if breakdown:
         text += "📋 <b>Топ расходов:</b>\n"

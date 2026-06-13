@@ -48,10 +48,10 @@ async def generate_monthly_chart(user_id: int, year: int, month: int) -> bytes:
     labels = [d['label'] for d in months_data]
 
     # Настройка графика
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 12))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 9))
     fig.patch.set_facecolor('#1a1a2e')
 
-    for ax in [ax1, ax2, ax3]:
+    for ax in [ax1, ax2]:
         ax.set_facecolor('#16213e')
         ax.tick_params(colors='white')
         ax.spines['bottom'].set_color('#444')
@@ -107,19 +107,6 @@ async def generate_monthly_chart(user_id: int, year: int, month: int) -> bytes:
     else:
         ax2.text(0.5, 0.5, 'Нет данных', ha='center', va='center', color='white', fontsize=12)
         ax2.set_title('Расходы по категориям', color='white', fontsize=11)
-
-    # --- Низ: Остаток (накопления) ---
-    colors_bal = ['#00d4aa' if b >= 0 else '#ff6b6b' for b in balances]
-    ax3.bar(labels, balances, color=colors_bal, alpha=0.85)
-    ax3.axhline(y=0, color='white', linewidth=0.8, linestyle='--', alpha=0.5)
-    ax3.set_title('Свободные деньги на конец месяца', color='white', fontsize=11, pad=8)
-    ax3.yaxis.set_tick_params(labelcolor='white')
-    ax3.set_xticklabels(labels, color='white', fontsize=9)
-
-    for i, (val, label) in enumerate(zip(balances, labels)):
-        color = '#00d4aa' if val >= 0 else '#ff6b6b'
-        ax3.text(i, val + (max(balances) * 0.02 if max(balances) != 0 else 100),
-                '{:,.0f}'.format(val), ha='center', va='bottom', color=color, fontsize=7)
 
     plt.tight_layout(pad=2.0)
 
