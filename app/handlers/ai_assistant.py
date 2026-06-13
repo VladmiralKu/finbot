@@ -269,6 +269,32 @@ async def cb_ai_end(call: CallbackQuery, state: FSMContext):
     )
 
 
+@router.message(AIState.chatting, F.voice)
+async def msg_ai_voice(message: Message, state: FSMContext):
+    """Голосовое сообщение в ИИ-ассистенте."""
+    import httpx, os
+    from app.handlers.voice import transcribe_voice
+    thinking = await message.answer("Распознаю голос...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        audio_bytes = file_bytes.read()
+        text = await transcribe_voice(audio_bytes)
+        if not text:
+            await thinking.edit_text("Не удалось распознать голос.")
+            return
+        await thinking.edit_text("Распознано: " + text)
+        # Передаём текст в основной хендлер ИИ
+        message.text = text
+        await msg_ai_chat(message, state)
+    except Exception as e:
+        try:
+            await thinking.delete()
+        except Exception:
+            pass
+        await message.answer("Ошибка: " + str(e))
+
+
 @router.message(AIState.chatting)
 async def msg_ai_chat(message: Message, state: FSMContext):
     can, used, limit = await check_ai_limit(message.from_user.id)
