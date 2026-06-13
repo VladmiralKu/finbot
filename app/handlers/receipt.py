@@ -89,6 +89,7 @@ async def msg_photo_receipt(message: Message):
         result = await scan_receipt_with_ai(image_bytes)
 
         await thinking.delete()
+        await message.answer("GPT ответ: " + result[:200])
 
         # Парсим транзакции
         categories = await get_categories(message.from_user.id)
