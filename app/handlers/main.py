@@ -589,17 +589,16 @@ async def msg_edit_tx_id(message: Message, state: FSMContext):
         await message.answer("Введи число (например: 42).")
         return
     tx_id = int(raw)
-    rows = await fetchall(
+    tx = await fetchone(
         "SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, c.name as cat_name "
         "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
         "WHERE t.id = %s AND t.user_id = %s",
         (tx_id, message.from_user.id)
     )
-    if not rows:
+    if not tx:
         await message.answer("Транзакция #" + str(tx_id) + " не найдена.")
         await state.clear()
         return
-    tx = rows[0]
     await state.update_data(tx_id=tx_id)
     await state.set_state(EditTxState.waiting_field)
     lines = [
