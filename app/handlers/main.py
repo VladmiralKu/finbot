@@ -582,6 +582,7 @@ async def cb_edit_by_id(call: CallbackQuery, state: FSMContext):
 
 @router.message(EditTxState.waiting_id)
 async def msg_edit_tx_id(message: Message, state: FSMContext):
+    await message.answer("DEBUG edit: " + str(message.text))
     try:
         tx_id = int(message.text.strip().replace("#", ""))
     except ValueError:
