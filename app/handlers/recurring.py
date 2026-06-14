@@ -43,7 +43,7 @@ async def cb_calendar(call: CallbackQuery):
             next_date = p[14]
             days_left = (next_date - today).days
             icon = "🔴" if days_left <= 1 else "🟡" if days_left <= 3 else "🟢"
-            amount_str = f"~{float(p[3]):,.0f}" if p[4] else f"{float(p[3]):,.0f}"
+            amount_str = f"~{abs(float(p[3])):,.0f}" if p[4] else f"{abs(float(p[3])):,.0f}"
             repeat = f"каждый {p[9]}й" if p[8] == 'monthly' else f"каждый {WEEKDAYS[p[10]]}"
             text += f"{icon} {p[2]} — {amount_str} руб.\n"
             text += f"   {next_date.strftime('%d.%m')} ({repeat}) — через {days_left} д.\n\n"
