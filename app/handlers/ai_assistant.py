@@ -49,6 +49,33 @@ async def get_user_context(user_id: int) -> str:
     )
     goals_str = "\n".join(["- " + g[0] for g in goals]) if goals else "не заданы"
 
+    # Последние 20 транзакций с комментариями
+    recent_txs = await fetchall(
+        """SELECT t.transaction_date, t.amount, t.type, c.name, t.comment
+           FROM transactions t
+           JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id = %s
+           ORDER BY t.transaction_date DESC, t.created_at DESC
+           LIMIT 20""",
+        (user_id,)
+    )
+    tx_lines = []
+    for tx in recent_txs:
+        sign = "-" if tx[2] == "expense" else "+"
+        comment = (" | " + tx[4]) if tx[4] else ""
+        tx_lines.append(
+            tx[0].strftime("%d.%m") + " " + sign + "{:,.0f}".format(float(tx[1])) +
+            " " + (tx[3] or "") + comment
+        )
+    txs_str = "\n".join(tx_lines) if tx_lines else "нет транзакций"
+
+    # Заметки пользователя
+    notes = await fetchall(
+        "SELECT text, created_at FROM notes WHERE user_id = %s ORDER BY created_at DESC LIMIT 10",
+        (user_id,)
+    )
+    notes_str = "\n".join(["- " + n[0] for n in notes]) if notes else "нет заметок"
+
     top_str = "\n".join(["- " + r[0] + ": " + "{:,.0f}".format(float(r[1])) + " руб." for r in top]) if top else "нет данных"
 
     return (
@@ -62,8 +89,10 @@ async def get_user_context(user_id: int) -> str:
         "Доходы: " + "{:,.0f}".format(prev['income']) + " руб.\n"
         "Расходы: " + "{:,.0f}".format(prev['total_expense']) + " руб.\n\n"
         "ТОП РАСХОДОВ:\n" + top_str + "\n\n"
+        "ПОСЛЕДНИЕ ТРАНЗАКЦИИ:\n" + txs_str + "\n\n"
         "КАТЕГОРИИ: " + cat_list + "\n\n"
-        "ЦЕЛИ ПОЛЬЗОВАТЕЛЯ:\n" + goals_str
+        "ЦЕЛИ ПОЛЬЗОВАТЕЛЯ:\n" + goals_str + "\n\n"
+        "ЗАМЕТКИ:\n" + notes_str
     )
 
 
