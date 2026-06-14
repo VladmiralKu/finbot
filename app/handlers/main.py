@@ -972,7 +972,7 @@ async def cb_export_all(call: CallbackQuery):
     ws1.title = "Транзакции"
     ws1.append(["ID", "Сумма", "Тип", "Вид", "Категория", "Комментарий", "Дата", "Создано"])
     rows = await fetchall("""
-        SELECT t.id, t.amount, t.type_, t.kind, c.name as category,
+        SELECT t.id, t.amount, t.type, t.kind, c.name as category,
                t.comment, t.transaction_date, t.created_at
         FROM transactions t
         LEFT JOIN categories c ON t.category_id = c.id
@@ -980,7 +980,7 @@ async def cb_export_all(call: CallbackQuery):
         ORDER BY t.transaction_date DESC
     """, (call.from_user.id,))
     for r in rows:
-        ws1.append([r["id"], float(r["amount"]), r["type_"], r["kind"],
+        ws1.append([r["id"], float(r["amount"]), r["type"], r["kind"],
                     r["category"], r["comment"], str(r["transaction_date"]), str(r["created_at"])])
 
     # 2. Категории
@@ -988,7 +988,7 @@ async def cb_export_all(call: CallbackQuery):
     ws2.append(["ID", "Название", "Тип", "Вид"])
     cats = await fetchall("SELECT id, name, type_, kind FROM categories WHERE user_id = %s", (call.from_user.id,))
     for r in cats:
-        ws2.append([r["id"], r["name"], r["type_"], r["kind"]])
+        ws2.append([r["id"], r["name"], r["type"], r["kind"]])
 
     # 3. Заметки
     ws3 = wb.create_sheet("Заметки")

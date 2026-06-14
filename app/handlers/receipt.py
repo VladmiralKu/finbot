@@ -27,7 +27,7 @@ async def scan_receipt_with_ai(image_bytes: bytes) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "gpt-4o-mini",
+                "model": "gpt-4o",
                 "max_tokens": 500,
                 "messages": [
                     {
