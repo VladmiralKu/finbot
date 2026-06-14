@@ -231,7 +231,7 @@ async def cb_recent(call: CallbackQuery):
             text=f"{MONTHS[m]} {y}",
             callback_data=f"txlist:{y}:{m}"
         )] for y, m in months],
-        [InlineKeyboardButton(text="Выгрузить всё в Excel", callback_data="export_excel")],
+        [InlineKeyboardButton(text="Выгрузить всё в Excel", callback_data="export_all")],
         [InlineKeyboardButton(text="Удалить транзакцию", callback_data="delete_by_id")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
