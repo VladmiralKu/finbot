@@ -995,14 +995,14 @@ async def cb_export_all(call: CallbackQuery):
     ws3.append(["ID", "Текст", "Создано"])
     notes = await fetchall("SELECT id, text, created_at FROM notes WHERE user_id = %s ORDER BY created_at DESC", (call.from_user.id,))
     for r in notes:
-        ws3.append([r["id"], r["text"], str(r["created_at"])])
+        ws3.append([r[0], r[1], str(r[2])])
 
     # 4. Цели
     ws4 = wb.create_sheet("Цели")
     ws4.append(["ID", "Текст", "Создано"])
     goals = await fetchall("SELECT id, goal_text, created_at FROM user_goals WHERE user_id = %s ORDER BY created_at DESC", (call.from_user.id,))
     for r in goals:
-        ws4.append([r["id"], r["goal_text"], str(r["created_at"])])
+        ws4.append([r[0], r[1], str(r[2])])
 
     # 5. История ИИ
     try:
@@ -1010,7 +1010,7 @@ async def cb_export_all(call: CallbackQuery):
         ws5.append(["ID", "Роль", "Сообщение", "Дата"])
         history = await fetchall("SELECT id, role, content, created_at FROM ai_history WHERE user_id = %s ORDER BY created_at", (call.from_user.id,))
         for r in history:
-            ws5.append([r["id"], r["role"], r["content"], str(r["created_at"])])
+            ws5.append([r[0], r[1], r[2], str(r[3])])
     except Exception:
         pass
 
