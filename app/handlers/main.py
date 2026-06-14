@@ -988,7 +988,7 @@ async def cb_export_all(call: CallbackQuery):
     ws2.append(["ID", "Название", "Тип", "Вид"])
     cats = await fetchall("SELECT id, name, type, kind FROM categories WHERE user_id = %s", (call.from_user.id,))
     for r in cats:
-        ws2.append([r["id"], r["name"], r["type"], r["kind"]])
+        ws2.append([r[0], r[1], r[2], r[3]])
 
     # 3. Заметки
     ws3 = wb.create_sheet("Заметки")

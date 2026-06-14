@@ -94,13 +94,10 @@ async def msg_photo_receipt(message: Message):
 
         # Ищем итоговую сумму в ответе GPT
         amount_found = None
+        # Сначала ищем БЕЗНАЛИЧНЫМИ — это всегда финальная сумма
         for pattern in [
-            r"ИТОГ[^\d]*(\d{3,}(?:[.,]\d{2})?)",
             r"БЕЗНАЛИЧНЫМИ?[^\d]*(\d{3,}(?:[.,]\d{2})?)",
-            r"итого[^\d]*(\d{3,}(?:[.,]\d{2})?)",
-            r"Total[^\d]*(\d{3,}(?:[.,]\d{2})?)",
-            r"-(\d{3,}(?:[.,]\d{2})?)\s",
-            r"(\d{3,}(?:[.,]\d{2})?)\s*руб",
+            r"безналичными?[^\d]*(\d{3,}(?:[.,]\d{2})?)",
         ]:
             m = _re.search(pattern, result, _re.IGNORECASE)
             if m:
@@ -111,6 +108,24 @@ async def msg_photo_receipt(message: Message):
                         break
                 except Exception:
                     continue
+
+        # Если не нашли — берём последнее вхождение ИТОГ
+        if not amount_found:
+            matches = list(_re.finditer(r"ИТОГ[^\d]*(\d{3,}(?:[.,]\d{2})?)", result, _re.IGNORECASE))
+            if matches:
+                try:
+                    amount_found = float(matches[-1].group(1).replace(",", "."))
+                except Exception:
+                    pass
+
+        # Фоллбек — Total
+        if not amount_found:
+            m = _re.search(r"Total[^\d]*(\d{3,}(?:[.,]\d{2})?)", result, _re.IGNORECASE)
+            if m:
+                try:
+                    amount_found = float(m.group(1).replace(",", "."))
+                except Exception:
+                    pass
 
         if amount_found:
             category_id = None
