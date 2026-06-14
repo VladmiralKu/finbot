@@ -221,20 +221,25 @@ async def cb_paid_recurring(call: CallbackQuery):
         await call.answer("Платёж не найден.")
         return
 
+    # fetchone может вернуть dict или tuple
+    if isinstance(payment, dict):
+        pay_name = payment['name']
+        pay_kind = payment.get('kind') or 'fixed'
+    else:
+        pay_name = payment[0]
+        pay_kind = payment[2] or 'fixed'
+
     # Находим категорию
     categories = await get_categories(call.from_user.id)
     category_id = None
-    category_name = ''
     for cat in categories:
         if 'прочие' in cat['name'].lower() and cat.get('type') == 'expense':
             category_id = cat['id']
-            category_name = cat['name']
             break
     if not category_id and categories:
         for cat in categories:
             if cat.get('type') == 'expense':
                 category_id = cat['id']
-                category_name = cat['name']
                 break
 
     if category_id:
@@ -243,13 +248,13 @@ async def cb_paid_recurring(call: CallbackQuery):
             category_id=category_id,
             amount=amount,
             type_='expense',
-            kind=payment['kind'] or 'fixed',
-            comment=payment['name']
+            kind=pay_kind,
+            comment=pay_name
         )
 
     await call.message.edit_text(
         f"✅ <b>Оплачено!</b>\n\n"
-        f"📌 {payment['name']} — {amount:,.0f} ₽\n"
+        f"📌 {pay_name} — {amount:,.0f} ₽\n"
         f"Транзакция записана.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
