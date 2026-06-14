@@ -91,71 +91,57 @@ async def msg_photo_receipt(message: Message):
         lines = result.strip().split("\n")
 
         import re as _re
-        for line in lines:
-            if "TRANSACTION:" in line:
-                tx_str = line[line.find("TRANSACTION:")+len("TRANSACTION:"):].strip()
+
+        # Ищем итоговую сумму в ответе GPT
+        amount_found = None
+        for pattern in [
+            r"ИТОГ[^\d]*(\d{3,}(?:[.,]\d{2})?)",
+            r"БЕЗНАЛИЧНЫМИ?[^\d]*(\d{3,}(?:[.,]\d{2})?)",
+            r"итого[^\d]*(\d{3,}(?:[.,]\d{2})?)",
+            r"Total[^\d]*(\d{3,}(?:[.,]\d{2})?)",
+            r"-(\d{3,}(?:[.,]\d{2})?)\s",
+            r"(\d{3,}(?:[.,]\d{2})?)\s*руб",
+        ]:
+            m = _re.search(pattern, result, _re.IGNORECASE)
+            if m:
                 try:
-                    # Ищем число в строке
-                    m = _re.search(r"[-]?(\d+(?:[.,]\d+)?)", tx_str)
-                    if not m:
-                        continue
-                    amount = float(m.group(1).replace(",", "."))
-                    if amount <= 0:
-                        continue
-
-                    # Определяем категорию по ключевым словам
-                    tx_lower = tx_str.lower()
-                    hint = ""
-                    if any(w in tx_lower for w in ["еда", "продукт", "магнит", "пятёрочка", "перекрёсток", "лента", "ашан"]):
-                        hint = "еда"
-                    elif any(w in tx_lower for w in ["транспорт", "такси", "автобус", "метро"]):
-                        hint = "транспорт"
-                    elif any(w in tx_lower for w in ["здоровье", "аптека", "больница"]):
-                        hint = "здоровье"
-                    elif any(w in tx_lower for w in ["одежда"]):
-                        hint = "одежда"
-
-                    category_id = None
-                    category_name = ''
-                    # Ищем по hint
-                    for cat in categories:
-                        if hint and hint.lower() in cat['name'].lower() and cat.get('type') == 'expense':
-                            category_id = cat['id']
-                            category_name = cat['name']
-                            break
-                    # Фоллбек на Еда/Продукты
-                    if not category_id:
-                        for cat in categories:
-                            if 'еда' in cat['name'].lower() and cat.get('type') == 'expense':
-                                category_id = cat['id']
-                                category_name = cat['name']
-                                break
-                    # Фоллбек на Прочие расходы
-                    if not category_id:
-                        for cat in categories:
-                            if 'прочие' in cat['name'].lower() and cat.get('type') == 'expense':
-                                category_id = cat['id']
-                                category_name = cat['name']
-                                break
-                    if not category_id:
-                        for cat in categories:
-                            if cat.get('type') == 'expense':
-                                category_id = cat['id']
-                                category_name = cat['name']
-                                break
-
-                    if category_id:
-                        await add_transaction(
-                            message.from_user.id,
-                            category_id=category_id,
-                            amount=amount,
-                            type_='expense',
-                            kind='variable',
-                            comment='Чек'
-                        )
-                        added.append("-" + str(int(amount)) + " руб. — " + category_name)
+                    val = float(m.group(1).replace(",", "."))
+                    if val > 0:
+                        amount_found = val
+                        break
                 except Exception:
-                    pass
+                    continue
+
+        if amount_found:
+            category_id = None
+            category_name = ""
+            for cat in categories:
+                if "еда" in cat["name"].lower() and cat.get("type") == "expense":
+                    category_id = cat["id"]
+                    category_name = cat["name"]
+                    break
+            if not category_id:
+                for cat in categories:
+                    if "прочие" in cat["name"].lower() and cat.get("type") == "expense":
+                        category_id = cat["id"]
+                        category_name = cat["name"]
+                        break
+            if not category_id:
+                for cat in categories:
+                    if cat.get("type") == "expense":
+                        category_id = cat["id"]
+                        category_name = cat["name"]
+                        break
+            if category_id:
+                await add_transaction(
+                    message.from_user.id,
+                    category_id=category_id,
+                    amount=amount_found,
+                    type_="expense",
+                    kind="variable",
+                    comment="Чек"
+                )
+                added.append("-" + str(int(amount_found)) + " руб. — " + category_name)
 
         if added:
             text = "Чек распознан! Внесено:\n" + "\n".join(added)

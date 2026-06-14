@@ -980,13 +980,13 @@ async def cb_export_all(call: CallbackQuery):
         ORDER BY t.transaction_date DESC
     """, (call.from_user.id,))
     for r in rows:
-        ws1.append([r["id"], float(r["amount"]), r["type"], r["kind"],
-                    r["category"], r["comment"], str(r["transaction_date"]), str(r["created_at"])])
+        ws1.append([r[0], float(r[1]), r[2], r[3],
+                    r[4], r[5], str(r[6]), str(r[7])])
 
     # 2. Категории
     ws2 = wb.create_sheet("Категории")
     ws2.append(["ID", "Название", "Тип", "Вид"])
-    cats = await fetchall("SELECT id, name, type_, kind FROM categories WHERE user_id = %s", (call.from_user.id,))
+    cats = await fetchall("SELECT id, name, type, kind FROM categories WHERE user_id = %s", (call.from_user.id,))
     for r in cats:
         ws2.append([r["id"], r["name"], r["type"], r["kind"]])
 
