@@ -207,6 +207,17 @@ async def cb_pay_rub(call: CallbackQuery):
             "confirmation": {"type": "redirect", "return_url": "https://t.me/Balansfinansbot"},
             "capture": True,
             "description": f"Баланс бот — {name} {label}",
+            "receipt": {
+                "customer": {"email": "noreply@balansbot.ru"},
+                "items": [{
+                    "description": f"{name} {label}",
+                    "quantity": "1.00",
+                    "amount": {"value": f"{amount / 100:.2f}", "currency": "RUB"},
+                    "vat_code": 1,
+                    "payment_mode": "full_payment",
+                    "payment_subject": "service",
+                }]
+            },
             "metadata": {
                 "user_id": str(call.from_user.id),
                 "tier": tier,
