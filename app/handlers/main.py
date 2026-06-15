@@ -54,6 +54,22 @@ async def cb_main_menu(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "add_expense")
 async def cb_add_expense(call: CallbackQuery, state: FSMContext):
+    from app.database import get_user_tier
+    tier = await get_user_tier(call.from_user.id)
+    if tier == 'free':
+        await call.answer(show_alert=True, text=(
+            "Probnyj period zakonchilsya. "
+            "Oformi podpisku!"
+        ))
+        await call.message.edit_text(
+            "Probnyj period zakonchilsya.\n\n"
+            "Dlya zapisi tranzakcij nuzhen tarif Start ili Premium.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Tariffy", callback_data="premium")],
+                [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+            ])
+        )
+        return
     categories = await get_categories(call.from_user.id, type_="expense")
     await state.set_state(AddTransaction.choosing_category)
     await state.update_data(tx_type="expense")
@@ -65,6 +81,22 @@ async def cb_add_expense(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "add_income")
 async def cb_add_income(call: CallbackQuery, state: FSMContext):
+    from app.database import get_user_tier
+    tier = await get_user_tier(call.from_user.id)
+    if tier == 'free':
+        await call.answer(show_alert=True, text=(
+            "Probnyj period zakonchilsya. "
+            "Oformi podpisku!"
+        ))
+        await call.message.edit_text(
+            "Probnyj period zakonchilsya.\n\n"
+            "Dlya zapisi tranzakcij nuzhen tarif Start ili Premium.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Tariffy", callback_data="premium")],
+                [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+            ])
+        )
+        return
     categories = await get_categories(call.from_user.id, type_="income")
     await state.set_state(AddTransaction.choosing_category)
     await state.update_data(tx_type="income")
