@@ -10,3 +10,4 @@ stripe==10.10.0
 openpyxl>=3.1.0
 matplotlib==3.9.0
 yookassa==3.10.1
+aiohttp>=3.9.0

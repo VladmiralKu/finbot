@@ -59,6 +59,9 @@ async def main():
 
     scheduler = setup_scheduler(bot)
 
+    from app.webhook_server import start_webhook_server
+    await start_webhook_server()
+
     try:
         logger.info("Bot started")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
