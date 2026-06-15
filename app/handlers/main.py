@@ -58,15 +58,13 @@ async def cb_add_expense(call: CallbackQuery, state: FSMContext):
     tier = await get_user_tier(call.from_user.id)
     if tier == 'free':
         await call.answer(show_alert=True, text=(
-            "Probnyj period zakonchilsya. "
-            "Oformi podpisku!"
+            "Пробный период закончился! Оформи подписку."
         ))
         await call.message.edit_text(
-            "Probnyj period zakonchilsya.\n\n"
-            "Dlya zapisi tranzakcij nuzhen tarif Start ili Premium.",
+            "Пробный период закончился.\n\nДля записи транзакций нужен тариф Старт или Премиум.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Tariffy", callback_data="premium")],
-                [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+                [InlineKeyboardButton(text="⭐ Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ])
         )
         return
@@ -85,15 +83,13 @@ async def cb_add_income(call: CallbackQuery, state: FSMContext):
     tier = await get_user_tier(call.from_user.id)
     if tier == 'free':
         await call.answer(show_alert=True, text=(
-            "Probnyj period zakonchilsya. "
-            "Oformi podpisku!"
+            "Пробный период закончился! Оформи подписку."
         ))
         await call.message.edit_text(
-            "Probnyj period zakonchilsya.\n\n"
-            "Dlya zapisi tranzakcij nuzhen tarif Start ili Premium.",
+            "Пробный период закончился.\n\nДля записи транзакций нужен тариф Старт или Премиум.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Tariffy", callback_data="premium")],
-                [InlineKeyboardButton(text="Menyu", callback_data="main_menu")],
+                [InlineKeyboardButton(text="⭐ Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ])
         )
         return
