@@ -160,13 +160,14 @@ async def msg_voice(message: Message):
                         break
 
             if category_id:
+                comment = parsed.get('comment', '') or text
                 await add_transaction(
                     message.from_user.id,
                     category_id=category_id,
                     amount=amount,
                     type_=type_,
                     kind=parsed.get('kind', 'variable'),
-                    comment=parsed.get('comment', '')
+                    comment=comment
                 )
                 sign = "-" if type_ == 'expense' else "+"
                 added.append(sign + str(int(amount)) + " руб. — " + category_name + hint_currency)

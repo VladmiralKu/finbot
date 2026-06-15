@@ -1223,7 +1223,7 @@ async def msg_free_text(message: Message):
                 amount=amount,
                 type_=type_,
                 kind=parsed.get('kind', 'variable'),
-                comment=parsed.get('comment', '')
+                comment=parsed.get('comment', '') or message.text
             )
             sign = "-" if type_ == 'expense' else "+"
             await message.answer(
@@ -1279,7 +1279,7 @@ async def msg_free_text(message: Message):
                     amount=amount,
                     type_=type_,
                     kind=parsed.get('kind', 'variable'),
-                    comment=parsed.get('comment', '')
+                    comment=parsed.get('comment', '') or message.text
                 )
                 sign = "-" if type_ == 'expense' else "+"
                 added.append(sign + str(int(amount)) + " руб. — " + category_name)
