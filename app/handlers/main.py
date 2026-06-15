@@ -266,22 +266,6 @@ async def cb_recent(call: CallbackQuery):
     await call.message.edit_text("Транзакции — выбери месяц:", parse_mode=None, reply_markup=kb)
 
 
-@router.callback_query(F.data == "premium")
-async def cb_premium(call: CallbackQuery):
-    prem = await is_premium(call.from_user.id)
-    text = (
-        "⭐ <b>Premium — $3/мес</b>\n\n"
-        "Что входит:\n"
-        "• Неограниченные транзакции\n"
-        "• 🤖 ИИ-анализ расходов\n"
-        "• 📷 Сканирование чеков\n"
-        "• Расширенные отчёты\n"
-        "• Финансовый план на месяц\n"
-    )
-    if prem:
-        text = "✅ <b>У вас активен Premium!</b>\n\n" + text
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=premium_keyboard(prem))
-
 
 @router.callback_query(F.data == "ai_analyze")
 async def cb_ai_analyze(call: CallbackQuery):
