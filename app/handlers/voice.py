@@ -179,6 +179,25 @@ async def msg_voice(message: Message):
                 ])
             )
         else:
+            # Проверяем — вопрос о боте?
+            from app.handlers.main import HELP_TRIGGERS, answer_help_question
+            text_lower = text.lower().strip()
+            if any(trigger in text_lower for trigger in HELP_TRIGGERS):
+                thinking2 = await message.answer("Сейчас расскажу...")
+                try:
+                    answer = await answer_help_question(text)
+                    await thinking2.delete()
+                    await message.answer(
+                        "❓ " + answer,
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                        ])
+                    )
+                except Exception as e:
+                    await thinking2.delete()
+                    await message.answer("Ошибка: " + str(e))
+                return
+
             # Не транзакция — отправляем в ИИ-ассистент
             from app.handlers.ai_assistant import get_ai_response, log_ai_usage
             thinking2 = await message.answer("Отправляю в ИИ-ассистент...")

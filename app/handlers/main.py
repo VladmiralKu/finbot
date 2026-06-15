@@ -1042,6 +1042,128 @@ async def cb_export_all(call: CallbackQuery):
     )
 
 
+
+HELP_TRIGGERS = [
+    "помощь", "помоги", "не понимаю", "как пользоваться", "что умеешь",
+    "как работает", "объясни", "расскажи", "хелп", "help", "мне нужна помощь",
+    "что ты умеешь", "как добавить", "как записать", "как посмотреть",
+    "не знаю", "подскажи", "инструкция"
+]
+
+BOT_KNOWLEDGE = """
+Ты — встроенный помощник финансового бота "Баланс". Отвечай кратко, дружелюбно, с emoji.
+Вот что умеет бот:
+
+📥 РАСХОДЫ И ДОХОДЫ
+- Кнопка "Расход" или "Доход" → выбери категорию → введи сумму → опционально комментарий
+- Быстрый ввод текстом: просто напиши сумму, например "500" или "-500 кофе"
+- Голосом: надиктуй трату, например "потратил 300 рублей на продукты"
+
+📋 ПОСЛЕДНИЕ ТРАНЗАКЦИИ
+- Кнопка "Последние" → список последних операций
+- Можно редактировать или удалять каждую транзакцию
+
+📊 ОТЧЁТЫ
+- Кнопка "Отчёты" → календарь, отчёт ДДС, графики по месяцам
+- Выгрузка всей базы в Excel
+
+🤖 ИИ-АССИСТЕНТ
+- Кнопка "ИИ-ассистент" → финансовый советник на базе GPT-4o
+- Помнит историю диалога, можно задавать вопросы о финансах
+- Голосовые сообщения работают внутри ассистента
+
+🧾 СКАНИРОВАНИЕ ЧЕКОВ
+- Просто отправь фото чека → бот автоматически распознает итоговую сумму
+
+📝 ЗАМЕТКИ
+- Кнопка "Заметки" → текстовые заметки, не привязанные к транзакциям
+
+🔁 ПОСТОЯННЫЕ РАСХОДЫ
+- Настрой регулярные платежи (аренда, подписки)
+- В день платежа бот напомнит и спросит оплачено ли
+
+⭐ ТАРИФЫ
+- Бесплатно: только просмотр последних и отчётов
+- Старт (149 руб/мес): расходы/доходы, 60 ИИ-сообщений
+- Премиум (590 руб/мес): всё + безлимитный ИИ
+
+📌 КОМАНДЫ
+- /start — главное меню
+- /help — эта справка
+- /category — управление категориями (добавить, удалить)
+- /reset — удалить все транзакции
+- /deleteaccount — удалить аккаунт полностью
+
+❓ Если что-то непонятно — просто спроси меня!
+"""
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    import httpx, os
+    thinking = await message.answer("Открываю справку...")
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", ""),
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-4o",
+                    "max_tokens": 500,
+                    "messages": [
+                        {"role": "system", "content": BOT_KNOWLEDGE},
+                        {"role": "user", "content": "Дай краткое приветственное описание бота и основные функции. Кратко, с emoji, не более 15 строк."}
+                    ],
+                },
+                timeout=15.0
+            )
+            data = response.json()
+            text = data["choices"][0]["message"]["content"]
+    except Exception:
+        text = (
+            "📌 Основные функции бота:\n\n"
+            "➕ Расход / Доход — записать трату или поступление\n"
+            "📋 Последние — история операций\n"
+            "📊 Отчёты — статистика и графики\n"
+            "🤖 ИИ-ассистент — финансовый советник\n"
+            "📝 Заметки — текстовые заметки\n"
+            "🧾 Чеки — отправь фото чека для распознавания\n"
+            "⭐ Тарифы — управление подпиской\n\n"
+            "По вопросам: @findir43"
+        )
+    await thinking.delete()
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+    ]))
+
+
+async def answer_help_question(user_text: str, bot_answer_func):
+    """Отвечает на вопрос о работе бота через GPT"""
+    import httpx, os
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer " + os.environ.get("OPENAI_API_KEY", ""),
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o",
+                "max_tokens": 400,
+                "messages": [
+                    {"role": "system", "content": BOT_KNOWLEDGE},
+                    {"role": "user", "content": user_text}
+                ],
+            },
+            timeout=15.0
+        )
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+
+
 @router.message(F.text, StateFilter(default_state))
 async def msg_free_text(message: Message):
     from app.database import get_user_tier, get_categories, add_transaction
@@ -1050,6 +1172,24 @@ async def msg_free_text(message: Message):
 
     # Игнорируем команды
     if message.text.startswith('/'):
+        return
+
+    # ИИ-хелпер — триггер по ключевым фразам
+    text_lower = message.text.lower().strip()
+    if any(trigger in text_lower for trigger in HELP_TRIGGERS):
+        thinking = await message.answer("Сейчас расскажу...")
+        try:
+            answer = await answer_help_question(message.text)
+            await thinking.delete()
+            await message.answer(
+                "❓ " + answer,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ])
+            )
+        except Exception as e:
+            await thinking.delete()
+            await message.answer("Ошибка хелпера: " + str(e))
         return
 
     tier = await get_user_tier(message.from_user.id)
