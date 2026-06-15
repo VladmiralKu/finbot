@@ -12,9 +12,26 @@ from app.database import get_subscription_tier, get_promo, use_promo, activate_s
 router = Router()
 
 # Звёзды
-START_STARS = 100      # ~149 руб
-PREMIUM_STARS = 400    # ~590 руб
-BOOSTER_STARS = 70     # ~100 руб
+START_STARS = 100
+PREMIUM_STARS = 400
+BOOSTER_STARS = 70
+
+# Цены в рублях (копейки для ЮКассы)
+PRICES = {
+    'start': {1: 14900, 3: 44700, 6: 80460},   # 6 мес = 149*6*0.9
+    'premium': {1: 59000, 3: 177000, 6: 318600}, # 6 мес = 590*6*0.9
+}
+
+PERIOD_LABELS = {
+    1: '1 месяц',
+    3: '3 месяца',
+    6: '6 месяцев (-10%)',
+}
+
+TIER_NAMES = {
+    'start': 'Старт',
+    'premium': 'Премиум',
+}
 
 
 class PromoState(StatesGroup):
@@ -29,8 +46,8 @@ def premium_keyboard(tier):
     buttons = []
     if tier == 'free':
         buttons = [
-            [InlineKeyboardButton(text="⭐ Старт — 100 звёзд (~149 руб)", callback_data="buy_start")],
-            [InlineKeyboardButton(text="⭐ Премиум — 400 звёзд (~590 руб)", callback_data="buy_premium")],
+            [InlineKeyboardButton(text="⭐ Старт — 100 звёзд (~149 руб)", callback_data="tier_start")],
+            [InlineKeyboardButton(text="⭐ Премиум — 400 звёзд (~590 руб)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
@@ -38,7 +55,7 @@ def premium_keyboard(tier):
         ]
     elif tier == 'start':
         buttons = [
-            [InlineKeyboardButton(text="⭐ Премиум — 400 звёзд (~590 руб)", callback_data="buy_premium")],
+            [InlineKeyboardButton(text="⭐ Премиум — 400 звёзд (~590 руб)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
@@ -55,6 +72,46 @@ def premium_keyboard(tier):
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def period_keyboard(tier):
+    p = PRICES[tier]
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"1 месяц — {p[1]//100} руб",
+            callback_data=f"period:{tier}:1"
+        )],
+        [InlineKeyboardButton(
+            text=f"3 месяца — {p[3]//100} руб",
+            callback_data=f"period:{tier}:3"
+        )],
+        [InlineKeyboardButton(
+            text=f"6 месяцев — {p[6]//100} руб (-10%)",
+            callback_data=f"period:{tier}:6"
+        )],
+        [InlineKeyboardButton(text="Назад", callback_data="premium")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def payment_keyboard(tier, months):
+    stars = START_STARS if tier == 'start' else PREMIUM_STARS
+    if months == 3:
+        stars = stars * 3
+    elif months == 6:
+        stars = int(stars * 6 * 0.9)
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"💳 Картой (ЮКасса)",
+            callback_data=f"pay_rub:{tier}:{months}"
+        )],
+        [InlineKeyboardButton(
+            text=f"⭐ Звёздами Telegram ({stars} ⭐)",
+            callback_data=f"pay_stars:{tier}:{months}"
+        )],
+        [InlineKeyboardButton(text="Назад", callback_data=f"tier_{tier}")],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -79,7 +136,7 @@ async def cb_premium(call: CallbackQuery):
             "Выгрузка в Excel\n\n"
             "Бустер — 100 руб (70 ⭐)\n"
             "+80 сообщений ИИ разово\n\n"
-            "Оплата звёздами Telegram"
+            "Оплата картой или звёздами Telegram"
         )
     elif tier == 'start':
         text = (
@@ -104,26 +161,93 @@ async def cb_premium(call: CallbackQuery):
     await call.message.edit_text(text, parse_mode=None, reply_markup=premium_keyboard(tier))
 
 
-@router.callback_query(F.data == "buy_start")
-async def cb_buy_start(call: CallbackQuery):
-    await call.message.answer_invoice(
-        title="Тариф Старт",
-        description="30 дней: голосовой ввод, чеки, отчёты, ИИ-ассистент 60 сообщений/мес",
-        payload="start_30",
-        currency="XTR",
-        prices=[LabeledPrice(label="Старт 30 дней (~149 руб)", amount=START_STARS)],
+@router.callback_query(F.data.in_({"tier_start", "tier_premium"}))
+async def cb_tier_select(call: CallbackQuery):
+    tier = call.data.replace("tier_", "")
+    name = TIER_NAMES[tier]
+    price1 = PRICES[tier][1] // 100
+    await call.message.edit_text(
+        f"Тариф {name}\n\nВыбери период подписки:",
+        parse_mode=None,
+        reply_markup=period_keyboard(tier)
     )
-    await call.answer()
 
 
-@router.callback_query(F.data == "buy_premium")
-async def cb_buy_premium(call: CallbackQuery):
+@router.callback_query(F.data.startswith("period:"))
+async def cb_period_select(call: CallbackQuery):
+    _, tier, months_str = call.data.split(":")
+    months = int(months_str)
+    name = TIER_NAMES[tier]
+    price = PRICES[tier][months] // 100
+    label = PERIOD_LABELS[months]
+    await call.message.edit_text(
+        f"Тариф {name} — {label}\nСтоимость: {price} руб\n\nВыбери способ оплаты:",
+        parse_mode=None,
+        reply_markup=payment_keyboard(tier, months)
+    )
+
+
+@router.callback_query(F.data.startswith("pay_rub:"))
+async def cb_pay_rub(call: CallbackQuery):
+    import os, uuid
+    from yookassa import Configuration, Payment
+
+    _, tier, months_str = call.data.split(":")
+    months = int(months_str)
+    amount = PRICES[tier][months]
+    name = TIER_NAMES[tier]
+    label = PERIOD_LABELS[months]
+
+    Configuration.account_id = os.environ.get("YOOKASSA_SHOP_ID")
+    Configuration.secret_key = os.environ.get("YOOKASSA_SECRET_KEY")
+
+    try:
+        payment = Payment.create({
+            "amount": {"value": f"{amount / 100:.2f}", "currency": "RUB"},
+            "confirmation": {"type": "redirect", "return_url": "https://t.me/Balansfinansbot"},
+            "capture": True,
+            "description": f"Баланс бот — {name} {label}",
+            "metadata": {
+                "user_id": str(call.from_user.id),
+                "tier": tier,
+                "months": months,
+            }
+        }, str(uuid.uuid4()))
+
+        url = payment.confirmation.confirmation_url
+        await call.message.edit_text(
+            f"Оплата {name} — {label}\n{amount // 100} руб\n\nНажми кнопку для оплаты картой:",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Оплатить картой", url=url)],
+                [InlineKeyboardButton(text="Назад", callback_data=f"period:{tier}:{months}")],
+            ])
+        )
+    except Exception as e:
+        await call.answer(f"Ошибка: {str(e)[:100]}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("pay_stars:"))
+async def cb_pay_stars(call: CallbackQuery):
+    _, tier, months_str = call.data.split(":")
+    months = int(months_str)
+    name = TIER_NAMES[tier]
+    label = PERIOD_LABELS[months]
+
+    base_stars = START_STARS if tier == 'start' else PREMIUM_STARS
+    if months == 1:
+        stars = base_stars
+    elif months == 3:
+        stars = base_stars * 3
+    else:
+        stars = int(base_stars * 6 * 0.9)
+
     await call.message.answer_invoice(
-        title="Тариф Премиум",
-        description="30 дней: всё включено + безлимитный ИИ-ассистент + выгрузка Excel",
-        payload="premium_30",
+        title=f"Тариф {name} — {label}",
+        description=f"{label} подписки {name}: все функции включены",
+        payload=f"{tier}_{months}mo",
         currency="XTR",
-        prices=[LabeledPrice(label="Премиум 30 дней (~590 руб)", amount=PREMIUM_STARS)],
+        prices=[LabeledPrice(label=f"{name} {label}", amount=stars)],
     )
     await call.answer()
 
@@ -144,8 +268,7 @@ async def cb_buy_booster(call: CallbackQuery):
 async def cb_donate(call: CallbackQuery, state: FSMContext):
     await state.set_state(DonateState.waiting_amount)
     await call.message.edit_text(
-        "Введи сумму доната в звёздах (например: 50, 100, 500):\n\n"
-        "1 звезда ≈ 1.5 руб",
+        "Выбери сумму доната в звёздах:\n\n1 звезда ≈ 1.5 руб",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="50 ⭐ (~75 руб)", callback_data="donate_50")],
             [InlineKeyboardButton(text="100 ⭐ (~150 руб)", callback_data="donate_100")],
@@ -177,13 +300,11 @@ async def pre_checkout(query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def successful_payment(message: Message):
     payload = message.successful_payment.invoice_payload
-    from app.database import execute, fetchone
 
     if payload.startswith("donate_"):
         stars = message.successful_payment.total_amount
         await message.answer(
-            f"Спасибо за поддержку! Получено {stars} звёзд 💝\n"
-            "Это очень важно для развития проекта!",
+            f"Спасибо за поддержку! Получено {stars} звёзд 💝",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
             ])
@@ -191,7 +312,7 @@ async def successful_payment(message: Message):
         return
 
     if payload == "booster_80":
-        # Добавляем 80 сообщений к лимиту
+        from app.database import execute
         await execute(
             """INSERT INTO ai_usage_boost (user_id, messages_added, created_at)
                VALUES (%s, 80, NOW())
@@ -207,11 +328,16 @@ async def successful_payment(message: Message):
         )
         return
 
-    tier = "premium" if "premium" in payload else "start"
-    await activate_stars_payment(message.from_user.id, tier=tier, days=30)
+    # Парсим tier и months из payload например "start_3mo" или "premium_1mo"
+    parts = payload.replace("mo", "").split("_")
+    tier = parts[0]
+    months = int(parts[1]) if len(parts) > 1 else 1
+    days = months * 30
+
+    await activate_stars_payment(message.from_user.id, tier=tier, days=days)
     tier_name = "Премиум" if tier == "premium" else "Старт"
     await message.answer(
-        f"Оплата прошла! Тариф {tier_name} активирован на 30 дней. Спасибо!",
+        f"Оплата прошла! Тариф {tier_name} активирован на {months} мес. Спасибо!",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
