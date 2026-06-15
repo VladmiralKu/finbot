@@ -11,12 +11,11 @@ async def scan_receipt_with_ai(image_bytes: bytes) -> str:
     image_b64 = base64.b64encode(image_bytes).decode('utf-8')
 
     system_prompt = (
-        "Найди в чеке строку ИТОГ или ИТОГО и верни ровно одну строку:\n"
-        "TRANSACTION: -СУММА КАТЕГОРИЯ бн\n"
-        "Где СУММА — число из строки ИТОГ/ИТОГО, КАТЕГОРИЯ — одно из: Еда/Продукты, Транспорт, Здоровье, Одежда, Развлечения, Прочие расходы.\n"
-        "Если оплата наличными — пиши нал вместо бн.\n"
-        "Отвечай ТОЛЬКО этой одной строкой. Ноль слов кроме неё.\n"
-        "Пример: TRANSACTION: -1112.53 Еда/Продукты бн"
+        "Ты распознаёшь чеки. Найди ИТОГОВУЮ сумму покупки (строка ИТОГ, ИТОГО, ИТОГ К ОПЛАТЕ, БЕЗНАЛИЧНЫМИ или НАЛИЧНЫМИ — это последняя сумма в чеке).\n"
+        "Верни ТОЛЬКО одну строку формата:\n"
+        "TOTAL: СУММА\n"
+        "Где СУММА — итоговое число. Никакого другого текста. Только TOTAL: и число.\n"
+        "Пример: TOTAL: 306.35"
     )
 
     async with httpx.AsyncClient() as client:
@@ -42,7 +41,7 @@ async def scan_receipt_with_ai(image_bytes: bytes) -> str:
                             },
                             {
                                 "type": "text",
-                                "text": "Распознай чек и верни транзакции в формате TRANSACTION:"
+                                "text": "Найди итоговую сумму чека и верни в формате TOTAL: СУММА"
                             }
                         ]
                     }
@@ -85,67 +84,39 @@ async def msg_photo_receipt(message: Message):
         await thinking.delete()
         await message.answer("GPT: " + result[:300])
 
-        # Парсим транзакции
+        # Парсим итоговую сумму из ответа GPT
         categories = await get_categories(message.from_user.id)
         added = []
-        lines = result.strip().split("\n")
 
         import re as _re
 
-        # Ищем итоговую сумму в ответе GPT
         amount_found = None
-        # Сначала ищем БЕЗНАЛИЧНЫМИ — это всегда финальная сумма
-        for pattern in [
-            r"БЕЗНАЛИЧНЫМИ?[^\d]*(\d{3,}(?:[.,]\d{2})?)",
-            r"безналичными?[^\d]*(\d{3,}(?:[.,]\d{2})?)",
-        ]:
-            m = _re.search(pattern, result, _re.IGNORECASE)
-            if m:
-                try:
-                    val = float(m.group(1).replace(",", "."))
-                    if val > 0:
-                        amount_found = val
-                        break
-                except Exception:
-                    continue
-
-        # Если не нашли — берём последнее вхождение ИТОГ
-        if not amount_found:
-            matches = list(_re.finditer(r"ИТОГ[^\d]*(\d{3,}(?:[.,]\d{2})?)", result, _re.IGNORECASE))
-            if matches:
-                try:
-                    amount_found = float(matches[-1].group(1).replace(",", "."))
-                except Exception:
-                    pass
-
-        # Фоллбек — Total
-        if not amount_found:
-            m = _re.search(r"Total[^\d]*(\d{3,}(?:[.,]\d{2})?)", result, _re.IGNORECASE)
-            if m:
-                try:
-                    amount_found = float(m.group(1).replace(",", "."))
-                except Exception:
-                    pass
+        m = _re.search(r"TOTAL:\s*([\d]+(?:[.,]\d{2})?)", result, _re.IGNORECASE)
+        if m:
+            try:
+                amount_found = float(m.group(1).replace(",", "."))
+            except Exception:
+                pass
 
         if amount_found:
             category_id = None
             category_name = ""
             for cat in categories:
-                if "еда" in cat["name"].lower() and cat.get("type") == "expense":
-                    category_id = cat["id"]
-                    category_name = cat["name"]
+                if "еда" in cat[1].lower() and cat[2] == "expense":
+                    category_id = cat[0]
+                    category_name = cat[1]
                     break
             if not category_id:
                 for cat in categories:
-                    if "прочие" in cat["name"].lower() and cat.get("type") == "expense":
-                        category_id = cat["id"]
-                        category_name = cat["name"]
+                    if "прочие" in cat[1].lower() and cat[2] == "expense":
+                        category_id = cat[0]
+                        category_name = cat[1]
                         break
             if not category_id:
                 for cat in categories:
-                    if cat.get("type") == "expense":
-                        category_id = cat["id"]
-                        category_name = cat["name"]
+                    if cat[2] == "expense":
+                        category_id = cat[0]
+                        category_name = cat[1]
                         break
             if category_id:
                 await add_transaction(
