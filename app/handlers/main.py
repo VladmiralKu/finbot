@@ -38,6 +38,8 @@ async def cmd_start(message: Message, state: FSMContext):
         f"Привет, {user.first_name}! 👋\n\n"
         "Я помогу тебе вести личный бюджет: записывать расходы и доходы, "
         "анализировать траты и давать советы.\n\n"
+        "📧 Обратная связь и помощь: findirvladislavku@gmail.com\n"
+        "📚 Обучение и команды: /help\n\n"
         "Выбирай действие:",
         reply_markup=main_menu(),
     )
