@@ -161,7 +161,8 @@ async def msg_voice(message: Message):
 
             if category_id:
                 comment = parsed.get('comment', '') or text
-                await add_transaction(
+                from app.database import fetchone
+                tx_result = await add_transaction(
                     message.from_user.id,
                     category_id=category_id,
                     amount=amount,
@@ -169,6 +170,8 @@ async def msg_voice(message: Message):
                     kind=parsed.get('kind', 'variable'),
                     comment=comment
                 )
+                check = await fetchone("SELECT comment FROM transactions WHERE id=%s", (tx_result['id'],))
+                await message.answer("DEBUG db comment: " + repr(check))
                 sign = "-" if type_ == 'expense' else "+"
                 added.append(sign + str(int(amount)) + " руб. — " + category_name + hint_currency)
 
