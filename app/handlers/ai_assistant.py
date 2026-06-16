@@ -161,7 +161,7 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
     if tier == 'free':
         return False, 0, 0
 
-    limits = {'start': 100, 'premium': 9999, 'business': 9999}
+    limits = {'scan_text': 60, 'base': 150, 'premium': 9999, 'business': 9999}
     limit = limits.get(tier, 0)
 
     now = datetime.now()

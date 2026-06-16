@@ -11,15 +11,17 @@ from app.database import get_subscription_tier, get_promo, use_promo, activate_s
 
 router = Router()
 
-# Звёзды
-START_STARS = 100
-PREMIUM_STARS = 400
+# Звёзды (округление вниз, курс ~1.48 руб/звезда)
+SCAN_TEXT_STARS = 100
+BASE_STARS = 196
+PREMIUM_STARS = 541
 BOOSTER_STARS = 70
 
-# Цены в рублях (копейки для ЮКассы)
+# Цены в рублях (копейки для ЮКассы), копейки всегда округляем вниз
 PRICES = {
-    'start': {1: 14900, 3: 44700, 6: 80460},   # 6 мес = 149*6*0.9
-    'premium': {1: 59000, 3: 177000, 6: 318600}, # 6 мес = 590*6*0.9
+    'scan_text': {1: 14900, 3: 44700, 6: 80400},   # 149*6=894, -10% = 804.6 -> 80400 (округлено вниз)
+    'base':      {1: 29000, 3: 87000, 6: 156600},  # 290*6=1740, -10% = 1566 -> 156600
+    'premium':   {1: 80000, 3: 240000, 6: 432000}, # 800*6=4800, -10% = 4320 -> 432000
 }
 
 PERIOD_LABELS = {
@@ -29,9 +31,19 @@ PERIOD_LABELS = {
 }
 
 TIER_NAMES = {
-    'start': 'Старт',
+    'scan_text': 'Скан и текст',
+    'base': 'База',
     'premium': 'Премиум',
 }
+
+TIER_STARS = {
+    'scan_text': SCAN_TEXT_STARS,
+    'base': BASE_STARS,
+    'premium': PREMIUM_STARS,
+}
+
+# Тарифы, к которым применим Бустер
+BOOSTER_ELIGIBLE_TIERS = {'scan_text', 'base'}
 
 
 class PromoState(StatesGroup):
@@ -46,16 +58,17 @@ def premium_keyboard(tier):
     buttons = []
     if tier == 'free':
         buttons = [
-            [InlineKeyboardButton(text="⭐ Старт — 100 звёзд (~149 руб)", callback_data="tier_start")],
-            [InlineKeyboardButton(text="⭐ Премиум — 400 звёзд (~590 руб)", callback_data="tier_premium")],
+            [InlineKeyboardButton(text="📝 Скан и текст — 149 руб (100 ⭐)", callback_data="tier_scan_text")],
+            [InlineKeyboardButton(text="⭐ База — 290 руб (196 ⭐)", callback_data="tier_base")],
+            [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]
-    elif tier == 'start':
+    elif tier in BOOSTER_ELIGIBLE_TIERS:
         buttons = [
-            [InlineKeyboardButton(text="⭐ Премиум — 400 звёзд (~590 руб)", callback_data="tier_premium")],
+            [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
@@ -96,11 +109,13 @@ def period_keyboard(tier):
 
 
 def payment_keyboard(tier, months):
-    stars = START_STARS if tier == 'start' else PREMIUM_STARS
-    if months == 3:
-        stars = stars * 3
-    elif months == 6:
-        stars = int(stars * 6 * 0.9)
+    base_stars = TIER_STARS[tier]
+    if months == 1:
+        stars = base_stars
+    elif months == 3:
+        stars = base_stars * 3
+    else:
+        stars = int(base_stars * 6 * 0.9)
     buttons = [
         [InlineKeyboardButton(
             text=f"💳 Картой (ЮКасса)",
@@ -125,30 +140,42 @@ async def cb_premium(call: CallbackQuery):
             "Бесплатный (сейчас у тебя)\n"
             "3 дня Премиума бесплатно при регистрации\n"
             "После окончания: только Последние, Отчёты и Заметки\n\n"
-            "Старт — 149 руб/мес (100 ⭐)\n"
-            "Быстрый ввод, голосовой ввод\n"
+            "Скан и текст — 149 руб/мес (100 ⭐)\n"
+            "Быстрый ввод текстом, сканирование чеков\n"
             "Отчёты ДДС, платёжный календарь\n"
-            "Сканирование чеков\n"
-            "ИИ-ассистент (60 сообщений/мес)\n\n"
-            "Премиум — 590 руб/мес (400 ⭐)\n"
-            "Всё из Старт +\n"
+            "ИИ-ассистент (60 сообщений/мес)\n"
+            "Без голосового ввода\n\n"
+            "База — 290 руб/мес (196 ⭐)\n"
+            "Всё из Скан и текст + голосовой ввод\n"
+            "ИИ-ассистент (150 сообщений/мес)\n\n"
+            "Премиум — 800 руб/мес (541 ⭐)\n"
+            "Всё из База +\n"
             "ИИ-ассистент безлимит\n"
+            "Свободные беседы с ИИ на любые темы\n"
             "Выгрузка в Excel\n\n"
             "Бустер — 100 руб (70 ⭐)\n"
-            "+80 сообщений ИИ разово\n\n"
+            "+80 сообщений ИИ разово (для тарифов Скан и текст / База)\n\n"
             "Оплата картой или звёздами Telegram"
         )
-    elif tier == 'start':
+    elif tier == 'scan_text':
         text = (
-            "У тебя активен тариф Старт!\n\n"
-            "Доступно: голос, чеки, отчёты, ИИ (60 сообщений/мес)\n\n"
-            "Upgrade до Премиум — безлимитный ИИ + Excel за 590 руб/мес\n\n"
+            "У тебя активен тариф Скан и текст!\n\n"
+            "Доступно: текстовый ввод, чеки, отчёты, ИИ (60 сообщений/мес)\n"
+            "Голосовой ввод недоступен на этом тарифе\n\n"
+            "Upgrade до Премиум — голос, безлимитный ИИ, свободные беседы + Excel за 800 руб/мес\n\n"
+            "Или купи Бустер +80 сообщений за 100 руб"
+        )
+    elif tier == 'base':
+        text = (
+            "У тебя активен тариф База!\n\n"
+            "Доступно: голос, чеки, отчёты, ИИ (150 сообщений/мес)\n\n"
+            "Upgrade до Премиум — безлимитный ИИ, свободные беседы + Excel за 800 руб/мес\n\n"
             "Или купи Бустер +80 сообщений за 100 руб"
         )
     elif tier == 'premium':
         text = (
             "У тебя активен Премиум!\n\n"
-            "Доступно всё включая безлимитный ИИ и Excel.\n"
+            "Доступно всё включая безлимитный ИИ, свободные беседы на любые темы и Excel.\n"
             "Спасибо за поддержку!"
         )
     else:
@@ -161,11 +188,10 @@ async def cb_premium(call: CallbackQuery):
     await call.message.edit_text(text, parse_mode=None, reply_markup=premium_keyboard(tier))
 
 
-@router.callback_query(F.data.in_({"tier_start", "tier_premium"}))
+@router.callback_query(F.data.in_({"tier_scan_text", "tier_base", "tier_premium"}))
 async def cb_tier_select(call: CallbackQuery):
     tier = call.data.replace("tier_", "")
     name = TIER_NAMES[tier]
-    price1 = PRICES[tier][1] // 100
     await call.message.edit_text(
         f"Тариф {name}\n\nВыбери период подписки:",
         parse_mode=None,
@@ -245,7 +271,7 @@ async def cb_pay_stars(call: CallbackQuery):
     name = TIER_NAMES[tier]
     label = PERIOD_LABELS[months]
 
-    base_stars = START_STARS if tier == 'start' else PREMIUM_STARS
+    base_stars = TIER_STARS[tier]
     if months == 1:
         stars = base_stars
     elif months == 3:
@@ -265,6 +291,14 @@ async def cb_pay_stars(call: CallbackQuery):
 
 @router.callback_query(F.data == "buy_booster")
 async def cb_buy_booster(call: CallbackQuery):
+    from app.database import get_subscription_tier
+    tier = await get_subscription_tier(call.from_user.id)
+    if tier not in BOOSTER_ELIGIBLE_TIERS:
+        await call.answer(
+            "Бустер доступен только для тарифов Скан и текст / База.",
+            show_alert=True
+        )
+        return
     await call.message.answer_invoice(
         title="Бустер +80 сообщений",
         description="Разовое пополнение: +80 сообщений ИИ-ассистента",
@@ -339,14 +373,14 @@ async def successful_payment(message: Message):
         )
         return
 
-    # Парсим tier и months из payload например "start_3mo" или "premium_1mo"
+    # Парсим tier и months из payload например "base_3mo" или "premium_1mo"
     parts = payload.replace("mo", "").split("_")
-    tier = parts[0]
-    months = int(parts[1]) if len(parts) > 1 else 1
+    tier = "_".join(parts[:-1])
+    months = int(parts[-1])
     days = months * 30
 
     await activate_stars_payment(message.from_user.id, tier=tier, days=days)
-    tier_name = "Премиум" if tier == "premium" else "Старт"
+    tier_name = TIER_NAMES.get(tier, tier)
     await message.answer(
         f"Оплата прошла! Тариф {tier_name} активирован на {months} мес. Спасибо!",
         parse_mode=None,
@@ -397,7 +431,7 @@ async def msg_promo_code(message: Message, state: FSMContext):
 
     success = await use_promo(message.from_user.id, promo_id, tier, days)
     if success:
-        tier_name = "Премиум" if tier == "premium" else "Старт"
+        tier_name = TIER_NAMES.get(tier, tier)
         await message.answer(
             f"Промокод активирован! {tier_name} на {days} дней — готово!",
             parse_mode=None,
