@@ -83,6 +83,7 @@ async def get_categories(user_id, type_=None):
 
 
 async def add_transaction(user_id, category_id, amount, type_, kind, comment="", receipt_photo_id=None):
+    amount = abs(amount)
     row = await fetchone(
         """INSERT INTO transactions (user_id, category_id, amount, type, kind, comment, receipt_photo_id)
            VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
