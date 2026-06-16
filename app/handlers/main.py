@@ -585,9 +585,8 @@ async def cb_txlist(call: CallbackQuery):
     for tx in txs:
         tx_id, date, amount, type_, comment, cat_name, wallet = tx
         sign = "-" if type_ == "expense" else "+"
-        wallet_str = {"cash": "нал", "card": "бн"}.get(wallet, "")
         comment_str = f" | {comment}" if comment else ""
-        text += f"#{tx_id} {date.strftime('%d.%m')} {sign}{float(amount):,.0f} {cat_name or ''} {wallet_str}{comment_str}\n"
+        text += f"#{tx_id} {date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {cat_name or ''}{comment_str}\n"
 
     await call.message.edit_text(
         text,
