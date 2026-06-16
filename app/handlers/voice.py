@@ -202,7 +202,9 @@ async def msg_voice(message: Message):
             from app.handlers.ai_assistant import get_ai_response, log_ai_usage
             thinking2 = await message.answer("Отправляю в ИИ-ассистент...")
             try:
-                ai_text, _ = await get_ai_response(message.from_user.id, text, [])
+                from app.database import get_user_tier
+                voice_tier = await get_user_tier(message.from_user.id)
+                ai_text, _ = await get_ai_response(message.from_user.id, text, [], tier=voice_tier)
                 await log_ai_usage(message.from_user.id)
                 await thinking2.delete()
                 await message.answer(

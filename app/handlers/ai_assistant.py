@@ -96,12 +96,38 @@ async def get_user_context(user_id: int) -> str:
     )
 
 
-async def get_ai_response(user_id: int, user_message: str, history: list) -> tuple[str, list]:
+async def get_ai_response(user_id: int, user_message: str, history: list, tier: str = None) -> tuple[str, list]:
     import os
 
     context = await get_user_context(user_id)
 
-    system_prompt = (
+    if tier == 'premium':
+        system_prompt = (
+            "Ты Баланс — персональный ассистент в финансовом приложении. "
+            "Пользователь на тарифе Премиум, поэтому можешь свободно общаться на любые темы, "
+            "не только финансовые — отвечай на любые текстовые вопросы как обычный полезный собеседник. "
+            "Ты работаешь только в текстовом формате: НЕ пытайся генерировать изображения, файлы, аудио или любой другой контент кроме текста — у тебя нет таких возможностей. "
+            "Если пользователь просит сгенерировать изображение или файл — вежливо объясни, что доступен только текстовый ответ.\n\n"
+            "При этом ты всё ещё хорошо разбираешься в финансах пользователя и можешь:\n"
+            "- Вносить транзакции по запросу пользователя\n"
+            "- Анализировать расходы и доходы\n"
+            "- Составлять финансовые планы\n"
+            "- Давать конкретные рекомендации с цифрами\n"
+            "- Запоминать цели пользователя\n\n"
+            "ПРАВИЛА ОТВЕТОВ:\n"
+            "- Отвечай по существу вопроса, кратко если возможно\n"
+            "- Если вопрос финансовый — используй цифры из контекста пользователя\n"
+            "- Не повторяй контекст пользователю дословно\n\n"
+            "ДЕЙСТВИЯ (добавляй в конец ответа если нужно, только если разговор финансовый):\n"
+            "Для внесения транзакции:\n"
+            "TRANSACTION: -1500 Еда/Продукты нал\n"
+            "Для сохранения цели:\n"
+            "GOAL: накопить 200000 к августу 2026\n"
+            "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
+            + context
+        )
+    else:
+        system_prompt = (
         "Ты Баланс — персональный финансовый ИИ-советник. "
         "Ты помогаешь только с финансовыми вопросами: учёт доходов и расходов, "
         "анализ трат, планирование бюджета, выход из финансового кризиса, "
@@ -124,8 +150,8 @@ async def get_ai_response(user_id: int, user_message: str, history: list) -> tup
         "Для сохранения цели:\n"
         "GOAL: накопить 200000 к августу 2026\n"
         "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
-        + context
-    )
+            + context
+        )
 
     messages = [{"role": "system", "content": system_prompt}]
     messages += history[-10:]
@@ -316,7 +342,9 @@ async def msg_ai_voice(message: Message, state: FSMContext):
         # Обрабатываем напрямую как ИИ-запрос
         from app.database import get_ai_history, save_ai_message
         history = await get_ai_history(message.from_user.id)
-        ai_text, new_history = await get_ai_response(message.from_user.id, text, history)
+        from app.database import get_user_tier
+        tier = await get_user_tier(message.from_user.id)
+        ai_text, new_history = await get_ai_response(message.from_user.id, text, history, tier=tier)
         await save_ai_message(message.from_user.id, 'user', text)
         await save_ai_message(message.from_user.id, 'assistant', ai_text)
         await log_ai_usage(message.from_user.id)
@@ -357,8 +385,10 @@ async def msg_ai_chat(message: Message, state: FSMContext):
 
     try:
         user_text = message.text or message.caption or ""
+        from app.database import get_user_tier
+        current_tier = await get_user_tier(message.from_user.id)
         ai_text, new_history = await get_ai_response(
-            message.from_user.id, user_text, history
+            message.from_user.id, user_text, history, tier=current_tier
         )
         await log_ai_usage(message.from_user.id)
     except Exception as e:
