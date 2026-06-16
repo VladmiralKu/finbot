@@ -102,21 +102,21 @@ async def msg_photo_receipt(message: Message):
             category_id = None
             category_name = ""
             for cat in categories:
-                if "еда" in cat[1].lower() and cat[2] == "expense":
-                    category_id = cat[0]
-                    category_name = cat[1]
+                if "еда" in cat["name"].lower() and cat["type"] == "expense":
+                    category_id = cat["id"]
+                    category_name = cat["name"]
                     break
             if not category_id:
                 for cat in categories:
-                    if "прочие" in cat[1].lower() and cat[2] == "expense":
-                        category_id = cat[0]
-                        category_name = cat[1]
+                    if "прочие" in cat["name"].lower() and cat["type"] == "expense":
+                        category_id = cat["id"]
+                        category_name = cat["name"]
                         break
             if not category_id:
                 for cat in categories:
-                    if cat[2] == "expense":
-                        category_id = cat[0]
-                        category_name = cat[1]
+                    if cat["type"] == "expense":
+                        category_id = cat["id"]
+                        category_name = cat["name"]
                         break
             if category_id:
                 await add_transaction(
@@ -142,5 +142,8 @@ async def msg_photo_receipt(message: Message):
         )
 
     except Exception as e:
-        await thinking.delete()
+        try:
+            await thinking.delete()
+        except Exception:
+            pass
         await message.answer("Ошибка при распознавании: " + str(e))
