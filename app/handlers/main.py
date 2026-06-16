@@ -203,10 +203,12 @@ async def cb_report_by_month(call: CallbackQuery):
         f"{'✅' if summary['balance'] >= 0 else '🔴'} Остаток: "
         f"<b>{summary['balance']:+,.0f} ₽</b>\n\n"
     )
-    # Все расходные категории с % от доходов
-    income = summary['income'] if summary['income'] else 1
+    # Все расходные категории с % от доходов (если доходов нет — % от общих расходов)
+    income = summary['income']
+    total_expense = summary['total_expense']
+    pct_base = income if income > 0 else (total_expense if total_expense > 0 else 0)
     balance = summary['balance']
-    balance_pct = (balance / income * 100) if income else 0
+    balance_pct = (balance / pct_base * 100) if pct_base else 0
 
     # Получаем все категории пользователя
     all_cats = await get_categories(call.from_user.id)
@@ -226,7 +228,7 @@ async def cb_report_by_month(call: CallbackQuery):
     if sorted_cats:
         text += "📋 <b>Расходы по категориям:</b>\n"
         for name, total in sorted_cats:
-            pct = (total / income * 100) if income else 0
+            pct = (total / pct_base * 100) if pct_base else 0
             icon = "🔒" if expense_kinds.get(name) == 'fixed' else "🛒"
             text += f"  {icon} {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
 
