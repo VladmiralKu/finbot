@@ -172,7 +172,6 @@ async def msg_voice(message: Message):
                 added.append(sign + str(int(amount)) + " руб. — " + category_name + hint_currency)
 
         if added:
-            await message.answer("DEBUG comment: " + repr(text))
             await message.answer(
                 "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added),
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
