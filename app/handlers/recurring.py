@@ -210,12 +210,11 @@ async def cb_paid_recurring(call: CallbackQuery):
     from app.database import fetchone, get_categories, add_transaction
     parts = call.data.split(":")
     payment_id = int(parts[1])
-    amount = float(parts[2])
 
-    # Получаем инфо о платеже
+    # Получаем инфо о платеже из БД (включая сумму — не доверяем callback_data)
     payment = await fetchone(
-        "SELECT name, user_id, kind FROM recurring_payments WHERE id = %s",
-        (payment_id,)
+        "SELECT name, user_id, kind, amount FROM recurring_payments WHERE id = %s AND user_id = %s",
+        (payment_id, call.from_user.id)
     )
     if not payment:
         await call.answer("Платёж не найден.")
@@ -225,9 +224,11 @@ async def cb_paid_recurring(call: CallbackQuery):
     if isinstance(payment, dict):
         pay_name = payment['name']
         pay_kind = payment.get('kind') or 'fixed'
+        amount = float(payment['amount'])
     else:
         pay_name = payment[0]
         pay_kind = payment[2] or 'fixed'
+        amount = float(payment[3])
 
     # Находим категорию
     categories = await get_categories(call.from_user.id)
@@ -269,10 +270,10 @@ async def cb_postpone_recurring(call: CallbackQuery):
     from datetime import date, timedelta
     payment_id = int(call.data.split(":")[1])
 
-    # Переносим на завтра — сбрасываем last_triggered_at
+    # Переносим на завтра — сбрасываем last_triggered_at (только если платёж принадлежит этому пользователю)
     await execute(
-        "UPDATE recurring_payments SET last_triggered_at = NULL WHERE id = %s",
-        (payment_id,)
+        "UPDATE recurring_payments SET last_triggered_at = NULL WHERE id = %s AND user_id = %s",
+        (payment_id, call.from_user.id)
     )
 
     await call.message.edit_text(
