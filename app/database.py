@@ -298,8 +298,8 @@ async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int 
     from datetime import datetime, timedelta
     until = datetime.now() + timedelta(days=days)
     await execute(
-        "UPDATE users SET is_premium=TRUE, premium_until=%s WHERE id=%s",
-        (until, user_id)
+        "UPDATE users SET subscription_tier=%s, is_premium=%s, premium_until=%s WHERE id=%s",
+        (tier, tier == 'premium', until, user_id)
     )
 
 
