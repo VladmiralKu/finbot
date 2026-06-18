@@ -14,8 +14,10 @@ async def scan_receipt_with_ai(image_bytes: bytes) -> str:
         "Ты распознаёшь чеки. Найди ИТОГОВУЮ сумму покупки (строка ИТОГ, ИТОГО, ИТОГ К ОПЛАТЕ, БЕЗНАЛИЧНЫМИ или НАЛИЧНЫМИ — это последняя сумма в чеке).\n"
         "Верни ТОЛЬКО одну строку формата:\n"
         "TOTAL: СУММА\n"
-        "Где СУММА — итоговое число. Никакого другого текста. Только TOTAL: и число.\n"
-        "Пример: TOTAL: 306.35"
+        "Где СУММА — итоговое число БЕЗ разделителей тысяч (никаких запятых и пробелов между цифрами), "
+        "с точкой как разделителем копеек. Никакого другого текста. Только TOTAL: и число.\n"
+        "Пример правильного ответа: TOTAL: 7608.00\n"
+        "Пример НЕПРАВИЛЬНОГО ответа: TOTAL: 7,608.00"
     )
 
     async with httpx.AsyncClient() as client:
@@ -91,10 +93,13 @@ async def msg_photo_receipt(message: Message):
         import re as _re
 
         amount_found = None
-        m = _re.search(r"TOTAL:\s*([\d]+(?:[.,]\d{2})?)", result, _re.IGNORECASE)
+        m = _re.search(r"TOTAL:\s*([\d.,]+)", result, _re.IGNORECASE)
         if m:
             try:
-                amount_found = float(m.group(1).replace(",", "."))
+                raw = m.group(1)
+                # Убираем разделители тысяч (запятые), оставляем точку как десятичный разделитель
+                raw = raw.replace(",", "")
+                amount_found = float(raw)
             except Exception:
                 pass
 
