@@ -66,7 +66,16 @@ def premium_keyboard(tier):
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]
-    elif tier in BOOSTER_ELIGIBLE_TIERS:
+    elif tier == 'scan_text':
+        buttons = [
+            [InlineKeyboardButton(text="⭐ База — 290 руб (196 ⭐)", callback_data="tier_base")],
+            [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
+            [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
+            [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
+            [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]
+    elif tier == 'base':
         buttons = [
             [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],

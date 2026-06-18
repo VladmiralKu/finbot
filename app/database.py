@@ -265,8 +265,8 @@ async def use_promo(user_id: int, promo_id: int, tier: str, days: int):
         return False
     until = datetime.now() + timedelta(days=days)
     await execute(
-        "UPDATE users SET is_premium=TRUE, premium_until=%s WHERE id=%s",
-        (until, user_id)
+        "UPDATE users SET subscription_tier=%s, is_premium=%s, premium_until=%s WHERE id=%s",
+        (tier, tier == 'premium', until, user_id)
     )
     await execute(
         "UPDATE promo_codes SET used_count=used_count+1 WHERE id=%s",
