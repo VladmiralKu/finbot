@@ -83,9 +83,9 @@ async def msg_voice(message: Message):
     from app.parser import parse_quick_input
 
     tier = await get_user_tier(message.from_user.id)
-    if tier == 'free':
+    if tier in ('free', 'scan_text'):
         await message.answer(
-            "Голосовой ввод доступен с тарифа Старт.",
+            "Голосовой ввод недоступен на тарифе Скан и текст. Доступен с тарифа База.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
             ])

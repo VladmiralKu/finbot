@@ -347,6 +347,18 @@ async def msg_ai_voice(message: Message, state: FSMContext):
     """Голосовое сообщение в ИИ-ассистенте."""
     import httpx, os
     from app.handlers.voice import transcribe_voice
+    from app.database import get_user_tier
+
+    voice_check_tier = await get_user_tier(message.from_user.id)
+    if voice_check_tier == 'scan_text':
+        await message.answer(
+            "Голосовой ввод недоступен на тарифе Скан и текст. Напиши вопрос текстом или перейди на тариф База.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+            ])
+        )
+        return
+
     thinking = await message.answer("Распознаю голос...")
     try:
         file = await message.bot.get_file(message.voice.file_id)
