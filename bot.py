@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from app.handlers.admin import router as admin_router
 from app.handlers.main import router as main_router
 from app.handlers.business import router as business_router
 from app.handlers.ai_assistant import router as ai_router
@@ -30,6 +31,7 @@ async def main():
     dp.message.middleware(MaintenanceMiddleware())
     dp.callback_query.middleware(MaintenanceMiddleware())
 
+    dp.include_router(admin_router)
     dp.include_router(main_router)
     dp.include_router(business_router)
     dp.include_router(ai_router)
