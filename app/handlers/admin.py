@@ -1,10 +1,16 @@
 from aiogram import Router, F
 from aiogram.types import Message
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 router = Router()
 
 ADMIN_ID = 388622523
+
+
+class BroadcastForwardState(StatesGroup):
+    waiting_post = State()
 
 
 def is_admin(user_id: int) -> bool:
@@ -34,10 +40,6 @@ async def cmd_admin_stats(message: Message):
     await message.answer(text, parse_mode=None)
 
 
-class BroadcastState:
-    waiting_text = {}
-
-
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
     if not is_admin(message.from_user.id):
@@ -61,6 +63,55 @@ async def cmd_broadcast(message: Message):
     for i, (user_id,) in enumerate(users):
         try:
             await message.bot.send_message(user_id, text, parse_mode=None)
+            sent += 1
+        except Exception:
+            failed += 1
+
+        if (i + 1) % 50 == 0:
+            try:
+                await status_msg.edit_text(
+                    "Рассылка идёт... " + str(i + 1) + "/" + str(len(users))
+                )
+            except Exception:
+                pass
+
+    await status_msg.edit_text(
+        "Рассылка завершена!\nОтправлено: " + str(sent) + "\nНе удалось: " + str(failed)
+    )
+
+
+
+@router.message(Command("broadcast_forward"))
+async def cmd_broadcast_forward(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(BroadcastForwardState.waiting_post)
+    await message.answer(
+        "Пришли пост (текст, фото, видео — что угодно), который нужно разослать всем пользователям.\n\n"
+        "Можно переслать сообщение из любого канала."
+    )
+
+
+@router.message(BroadcastForwardState.waiting_post)
+async def msg_broadcast_forward_post(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+
+    from app.database import fetchall
+    users = await fetchall("SELECT id FROM users")
+
+    sent = 0
+    failed = 0
+    status_msg = await message.answer("Рассылка началась... 0/" + str(len(users)))
+
+    for i, (user_id,) in enumerate(users):
+        try:
+            await message.bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
             sent += 1
         except Exception:
             failed += 1
