@@ -1111,6 +1111,19 @@ BOT_KNOWLEDGE = """
 """
 
 
+@router.message(Command("offer"))
+async def cmd_offer(message: Message):
+    from app.offer_text import OFFER_TEXT, OFFER_TEXT_2, OFFER_TEXT_3, OFFER_TEXT_4, OFFER_TEXT_5
+    for part in [OFFER_TEXT, OFFER_TEXT_2, OFFER_TEXT_3, OFFER_TEXT_4, OFFER_TEXT_5]:
+        await message.answer(part, parse_mode=None)
+    await message.answer(
+        "Меню",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     text = (
@@ -1135,6 +1148,7 @@ async def cmd_help(message: Message):
         "📌 Команды\n"
         "/start — главное меню\n"
         "/help — эта справка\n"
+        "/offer — публичная оферта (условия использования)\n"
         "/reset — удалить все транзакции\n"
         "/deleteaccount — удалить аккаунт полностью\n\n"
         "✉️ Связь и поддержка\n"
