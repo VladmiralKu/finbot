@@ -138,12 +138,15 @@ async def msg_voice(message: Message):
 
             category_id = None
             category_name = ''
-            for cat in categories:
-                if hint and hint.lower() in cat['name'].lower():
-                    category_id = cat['id']
-                    category_name = cat['name']
-                    type_ = cat.get('type', type_)
-                    break
+            hint_lower = hint.lower().strip() if hint else ''
+            if hint_lower:
+                for cat in categories:
+                    cat_name_lower = cat['name'].lower()
+                    if hint_lower in cat_name_lower or cat_name_lower in hint_lower:
+                        category_id = cat['id']
+                        category_name = cat['name']
+                        type_ = cat.get('type', type_)
+                        break
 
             if not category_id:
                 # Сначала ищем "Прочие расходы"

@@ -717,7 +717,7 @@ async def msg_edit_tx_value(message: Message, state: FSMContext):
     category_id = None
     matched_cat = None
     for cat in cats:
-        if hint and hint.lower() in cat['name'].lower():
+        if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
             category_id = cat['id']
             matched_cat = cat
             break
@@ -1225,7 +1225,7 @@ async def msg_free_text(message: Message):
         category_id = None
         category_name = ''
         for cat in categories:
-            if hint and hint.lower() in cat['name'].lower():
+            if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
                 category_id = cat['id']
                 category_name = cat['name']
                 break
@@ -1275,7 +1275,7 @@ async def msg_free_text(message: Message):
             category_id = None
             category_name = ''
             for cat in categories:
-                if hint and hint.lower() in cat['name'].lower():
+                if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
                     category_id = cat['id']
                     category_name = cat['name']
                     break

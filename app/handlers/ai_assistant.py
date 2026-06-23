@@ -227,7 +227,7 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
                     type_ = parsed.get('type', 'expense')
                     category_id = None
                     for cat in categories:
-                        if hint and hint.lower() in cat['name'].lower():
+                        if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
                             category_id = cat['id']
                             type_ = cat.get('type', type_)
                             break
@@ -333,7 +333,11 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "ai_end")
 async def cb_ai_end(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await call.message.edit_text(
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.message.answer(
         "Чат завершён.",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[

@@ -24,6 +24,7 @@ async def execute(query, params=None):
     conn = await get_pool()
     async with conn.cursor() as cur:
         await cur.execute(query, params)
+        return cur.rowcount
 
 
 async def fetchone(query, params=None):
