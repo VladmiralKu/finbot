@@ -9,7 +9,7 @@ INCOME_WORDS = (
     "зарплат", "получил", "получила", "получили", "получен", "пришло",
     "пришла", "поступ", "доход", "заработ", "выруч", "аванс", "перевели",
     "начислили", "продал", "продала", "продаж", "оплатили", "выплат",
-    "гонорар", "дивиденд", "кэшбек", "кешбек", "возврат", "прибыл",
+    "гонорар", "дивиденд", "кэшбек", "кешбек", "возврат", "прибыл", "зп",
 )
 
 EXPENSE_WORDS = (
@@ -59,6 +59,13 @@ NUMBER_WORDS = tuple(
     )
 )
 NUMBER_WORD_RE = "|".join(re.escape(word) for word in NUMBER_WORDS)
+
+
+def _normalize_income_aliases(text: str) -> str:
+    text = re.sub(r"\bз\s*/\s*п\b", "зарплата", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bз\s*\.\s*п\s*\.?\b", "зарплата", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bзп\b", "зарплата", text, flags=re.IGNORECASE)
+    return text
 
 
 def _guess_type(text: str, explicit_type: str | None = None, amount_token: str | None = None) -> str:
@@ -255,7 +262,7 @@ async def _build_transaction(
 
 
 async def extract_transactions_from_text(user_id: int, text: str, source: str) -> list[dict]:
-    text = _normalize_amount_phrases(text or "")
+    text = _normalize_amount_phrases(_normalize_income_aliases(text or ""))
 
     multi_transactions = []
     for segment, amount_token in _candidate_segments(text):
