@@ -21,6 +21,42 @@ EXPENSE_WORDS = (
 
 AMOUNT_RE = re.compile(r"(?<!\d)([+-]?\d+(?:[.,]\d{1,2})?)(?!\d)")
 CONNECTOR_RE = re.compile(r"\b(?:и|а|потом|затем|далее|ещ[её]|плюс)\b|[,;]", re.IGNORECASE)
+CURRENCY_WORD_RE = re.compile(r"^(?:руб(?:лей|ля|ль|\.?)?|р|₽)?$", re.IGNORECASE)
+
+UNITS = {
+    "один": 1, "одна": 1, "одно": 1, "две": 2, "два": 2, "три": 3,
+    "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
+}
+TEENS = {
+    "десять": 10, "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13,
+    "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16,
+    "семнадцать": 17, "восемнадцать": 18, "девятнадцать": 19,
+}
+TENS = {
+    "двадцать": 20, "тридцать": 30, "сорок": 40, "пятьдесят": 50,
+    "шестьдесят": 60, "семьдесят": 70, "восемьдесят": 80, "девяносто": 90,
+}
+HUNDREDS = {
+    "сто": 100, "двести": 200, "триста": 300, "четыреста": 400,
+    "пятьсот": 500, "шестьсот": 600, "семьсот": 700,
+    "восемьсот": 800, "девятьсот": 900,
+}
+SLANG_THOUSANDS = {
+    "пятерка": 5000, "пятёрка": 5000, "пятерку": 5000, "пятёрку": 5000,
+    "десятка": 10000, "десятку": 10000,
+    "пятнашка": 15000, "пятнашку": 15000,
+    "двадцатка": 20000, "двадцатку": 20000,
+    "тридцатка": 30000, "тридцатку": 30000,
+    "сорокет": 40000, "полтос": 50000,
+}
+NUMBER_WORDS = tuple(
+    sorted(
+        set(UNITS) | set(TEENS) | set(TENS) | set(HUNDREDS) | {"полтора", "полторы"},
+        key=len,
+        reverse=True,
+    )
+)
+NUMBER_WORD_RE = "|".join(re.escape(word) for word in NUMBER_WORDS)
 
 
 def _guess_type(text: str, explicit_type: str | None = None, amount_token: str | None = None) -> str:
@@ -38,6 +74,59 @@ def _guess_type(text: str, explicit_type: str | None = None, amount_token: str |
     if any(word in lower for word in EXPENSE_WORDS):
         return "expense"
     return "expense"
+
+
+def _words_to_number(phrase: str) -> float | None:
+    total = 0.0
+    found = False
+    for token in re.findall(r"[а-яё]+", phrase.lower()):
+        if token in ("полтора", "полторы"):
+            total += 1.5
+            found = True
+        elif token in HUNDREDS:
+            total += HUNDREDS[token]
+            found = True
+        elif token in TENS:
+            total += TENS[token]
+            found = True
+        elif token in TEENS:
+            total += TEENS[token]
+            found = True
+        elif token in UNITS:
+            total += UNITS[token]
+            found = True
+    return total if found else None
+
+
+def _normalize_amount_phrases(text: str) -> str:
+    result = text
+
+    for word, amount in SLANG_THOUSANDS.items():
+        result = re.sub(rf"\b{re.escape(word)}\b", str(amount), result, flags=re.IGNORECASE)
+
+    result = re.sub(
+        r"\b(\d+(?:[.,]\d+)?)\s*(?:тыс\.?|тысяч[а-я]*)\b",
+        lambda m: str(int(float(m.group(1).replace(",", ".")) * 1000)),
+        result,
+        flags=re.IGNORECASE,
+    )
+
+    result = re.sub(
+        r"\b((?:" + NUMBER_WORD_RE + r")(?:\s+(?:" + NUMBER_WORD_RE + r")){0,3})\s+(?:тыс\.?|тысяч[а-я]*)\b",
+        lambda m: str(int((_words_to_number(m.group(1)) or 0) * 1000)),
+        result,
+        flags=re.IGNORECASE,
+    )
+
+    result = re.sub(
+        r"\b((?:" + NUMBER_WORD_RE + r")(?:\s+(?:" + NUMBER_WORD_RE + r")){0,3})\s+(?:руб(?:лей|ля|ль)?|р|₽)\b",
+        lambda m: str(int(_words_to_number(m.group(1)) or 0)) + " рублей",
+        result,
+        flags=re.IGNORECASE,
+    )
+
+    result = re.sub(r"\bполтор[аы]\b", "1500", result, flags=re.IGNORECASE)
+    return result
 
 
 def _find_amount(text: str) -> float | None:
@@ -106,9 +195,8 @@ def _left_context(text: str, previous_end: int | None, current_start: int) -> st
 
 def _right_context(text: str, current_end: int, next_start: int | None) -> str:
     raw = text[current_end:] if next_start is None else text[current_end:next_start]
-    if next_start is not None:
-        parts = CONNECTOR_RE.split(raw, maxsplit=1)
-        raw = parts[0] if parts else ""
+    parts = CONNECTOR_RE.split(raw, maxsplit=1)
+    raw = parts[0] if parts else ""
     return raw.strip()
 
 
@@ -119,6 +207,12 @@ def _candidate_segments(text: str) -> list[tuple[str, str]]:
 
     result = []
     for index, match in enumerate(matches):
+        if index > 0 and match.group(1) == matches[index - 1].group(1):
+            raw_between = text[matches[index - 1].end():match.start()]
+            next_start = matches[index + 1].start() if index + 1 < len(matches) else None
+            right = _right_context(text, match.end(), next_start)
+            if "," in raw_between and all(CURRENCY_WORD_RE.match(word) for word in right.split()):
+                continue
         previous_end = matches[index - 1].end() if index > 0 else None
         next_start = matches[index + 1].start() if index + 1 < len(matches) else None
         left = _left_context(text, previous_end, match.start())
@@ -159,6 +253,8 @@ async def _build_transaction(
 
 
 async def extract_transactions_from_text(user_id: int, text: str, source: str) -> list[dict]:
+    text = _normalize_amount_phrases(text or "")
+
     multi_transactions = []
     for segment, amount_token in _candidate_segments(text):
         amount = _parse_amount(amount_token)
