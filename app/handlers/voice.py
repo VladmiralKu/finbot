@@ -1,7 +1,6 @@
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import StateFilter
-from aiogram.fsm.state import default_state
+from aiogram.fsm.context import FSMContext
 import httpx
 import os
 
@@ -77,10 +76,22 @@ async def parse_voice_to_transaction(text: str, categories: list = None) -> list
         return [line.strip() for line in result.split("\n") if line.strip()]
 
 
-@router.message(F.voice, StateFilter(default_state))
-async def msg_voice(message: Message):
-    from app.database import get_user_tier, get_categories, add_transaction
-    from app.parser import parse_quick_input
+@router.message(F.voice)
+async def msg_voice(message: Message, state: FSMContext):
+    from app.database import get_user_tier
+    from app.handlers.ai_assistant import AIState
+    from app.handlers.business import NoteSearchState, NoteState
+    from app.services.transaction_ai import extract_transactions_from_text
+    from app.services.transaction_service import create_transaction
+
+    current_state = await state.get_state()
+    forbidden_states = {
+        AIState.chatting.state,
+        NoteState.waiting_text.state,
+        NoteSearchState.waiting_id.state,
+    }
+    if current_state in forbidden_states:
+        return
 
     tier = await get_user_tier(message.from_user.id)
     if tier in ('free', 'scan_text'):
@@ -109,9 +120,7 @@ async def msg_voice(message: Message):
         await thinking.delete()
         await message.answer("Распознано: " + text)
 
-        # Преобразуем в формат транзакций через GPT
-        categories = await get_categories(message.from_user.id)
-        tx_lines = await parse_voice_to_transaction(text, categories)
+        transactions = await extract_transactions_from_text(message.from_user.id, text, source="voice")
         added = []
 
         # Проверяем нужна ли конвертация валюты
@@ -119,14 +128,9 @@ async def msg_voice(message: Message):
         if any(w in text.lower() for w in ['долларов', 'доллар', 'доллара', '$', 'usd']):
             usd_rate = await get_usd_rate()
 
-        for tx_str in tx_lines:
-            parsed = parse_quick_input(tx_str)
-            if not parsed or not parsed.get('amount'):
-                continue
-
-            amount = parsed.get('amount')
-            type_ = parsed.get('type', 'expense')
-            hint = parsed.get('category_hint', '')
+        for tx in transactions:
+            amount = tx.get("amount")
+            type_ = tx.get("type", "expense")
 
             # Конвертируем если нужно
             if usd_rate and amount:
@@ -136,45 +140,22 @@ async def msg_voice(message: Message):
             else:
                 hint_currency = ""
 
-            category_id = None
-            category_name = ''
-            hint_lower = hint.lower().strip() if hint else ''
-            if hint_lower:
-                for cat in categories:
-                    cat_name_lower = cat['name'].lower()
-                    if hint_lower in cat_name_lower or cat_name_lower in hint_lower:
-                        category_id = cat['id']
-                        category_name = cat['name']
-                        type_ = cat.get('type', type_)
-                        break
-
-            if not category_id:
-                # Сначала ищем "Прочие расходы"
-                for cat in categories:
-                    if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
-                        category_id = cat['id']
-                        category_name = cat['name']
-                        break
-            if not category_id:
-                for cat in categories:
-                    if cat.get('type') == type_:
-                        category_id = cat['id']
-                        category_name = cat['name']
-                        break
-
-            if category_id:
-                await add_transaction(
-                    message.from_user.id,
-                    category_id=category_id,
-                    amount=amount,
-                    type_=type_,
-                    kind=parsed.get('kind', 'variable'),
-                    comment=text
-                )
-                sign = "-" if type_ == 'expense' else "+"
-                added.append(sign + str(int(amount)) + " руб. — " + category_name + hint_currency)
+            saved = await create_transaction(
+                user_id=message.from_user.id,
+                category_id=tx["category_id"],
+                amount=amount,
+                type_=type_,
+                kind=tx.get("kind"),
+                comment=tx.get("comment") or text,
+                transaction_date=tx.get("transaction_date"),
+                pnl_period=tx.get("pnl_period"),
+            )
+            sign = "-" if type_ == 'expense' else "+"
+            added.append(sign + str(int(amount)) + " руб. — " + tx["category_name"] + hint_currency + f" #{saved['id']}")
 
         if added:
+            if current_state:
+                await state.clear()
             await message.answer(
                 "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added),
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -182,8 +163,7 @@ async def msg_voice(message: Message):
                 ])
             )
         else:
-            # Проверяем — вопрос о боте?
-            from app.handlers.main import HELP_TRIGGERS, answer_help_question
+            from app.handlers.main import HELP_TRIGGERS, answer_help_question, handle_intent_message
             text_lower = text.lower().strip()
             if any(trigger in text_lower for trigger in HELP_TRIGGERS):
                 thinking2 = await message.answer("Сейчас расскажу...")
@@ -201,24 +181,14 @@ async def msg_voice(message: Message):
                     await message.answer("Ошибка: " + str(e))
                 return
 
-            # Не транзакция — отправляем в ИИ-ассистент
-            from app.handlers.ai_assistant import get_ai_response, log_ai_usage
-            thinking2 = await message.answer("Отправляю в ИИ-ассистент...")
-            try:
-                from app.database import get_user_tier
-                voice_tier = await get_user_tier(message.from_user.id)
-                ai_text, _ = await get_ai_response(message.from_user.id, text, [], tier=voice_tier)
-                await log_ai_usage(message.from_user.id)
-                await thinking2.delete()
+            handled = await handle_intent_message(message, state, text, source="voice")
+            if not handled:
                 await message.answer(
-                    ai_text,
+                    "Не понял команду. Можно сказать, например: «500 рублей на продукты» или «покажи отчёт за июнь».",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                     ])
                 )
-            except Exception as e:
-                await thinking2.delete()
-                await message.answer("Ошибка ИИ: " + str(e))
 
     except Exception as e:
         try:

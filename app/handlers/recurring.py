@@ -205,9 +205,9 @@ async def cb_remind(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith("paid:"))
+@router.callback_query(F.data.startswith("paid:") | F.data.startswith("reminder_ack:"))
 async def cb_paid_recurring(call: CallbackQuery):
-    from app.database import fetchone, get_categories, add_transaction
+    from app.database import fetchone, mark_reminder_sent
     parts = call.data.split(":")
     payment_id = int(parts[1])
 
@@ -223,40 +223,17 @@ async def cb_paid_recurring(call: CallbackQuery):
     # fetchone может вернуть dict или tuple
     if isinstance(payment, dict):
         pay_name = payment['name']
-        pay_kind = payment.get('kind') or 'fixed'
         amount = float(payment['amount'])
     else:
         pay_name = payment[0]
-        pay_kind = payment[2] or 'fixed'
         amount = float(payment[3])
 
-    # Находим категорию
-    categories = await get_categories(call.from_user.id)
-    category_id = None
-    for cat in categories:
-        if 'прочие' in cat['name'].lower() and cat.get('type') == 'expense':
-            category_id = cat['id']
-            break
-    if not category_id and categories:
-        for cat in categories:
-            if cat.get('type') == 'expense':
-                category_id = cat['id']
-                break
-
-    if category_id:
-        await add_transaction(
-            call.from_user.id,
-            category_id=category_id,
-            amount=amount,
-            type_='expense',
-            kind=pay_kind,
-            comment=pay_name
-        )
+    await mark_reminder_sent(payment_id)
 
     await call.message.edit_text(
-        f"✅ <b>Оплачено!</b>\n\n"
+        f"✅ <b>Принято.</b>\n\n"
         f"📌 {pay_name} — {amount:,.0f} ₽\n"
-        f"Транзакция записана.",
+        "Платёж отмечен как напомненный. Транзакцию внеси отдельно, когда будет удобно.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],

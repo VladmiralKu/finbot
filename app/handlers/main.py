@@ -9,11 +9,19 @@ from datetime import datetime
 
 from app.database import (
     execute, fetchone, fetchall,
-    get_or_create_user, get_categories, add_transaction,
+    get_or_create_user, get_categories,
     get_monthly_summary, get_recent_transactions,
     get_category_breakdown, is_premium,
 )
-from app.keyboards import main_menu, categories_keyboard, confirm_keyboard, premium_keyboard
+from app.keyboards import (
+    MAIN_REPLY_KB,
+    main_menu,
+    manual_input_keyboard,
+    categories_keyboard,
+    confirm_keyboard,
+    premium_keyboard,
+)
+from app.services.transaction_service import create_transaction
 
 router = Router()
 
@@ -34,6 +42,7 @@ async def cmd_start(message: Message, state: FSMContext):
         user.full_name or "",
         user.language_code or "ru",
     )
+    await message.answer("Кнопка меню включена.", reply_markup=MAIN_REPLY_KB)
     await message.answer(
         f"Привет, {user.first_name}! 👋\n\n"
         "Я помогу тебе вести личный бюджет: записывать расходы и доходы, "
@@ -45,6 +54,12 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
+@router.message(F.text.in_({"🏠 Меню", "Меню", "/start"}))
+async def msg_open_menu(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Выбирай действие:", reply_markup=main_menu())
+
+
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -52,6 +67,12 @@ async def cb_main_menu(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text("Выбирай действие:", reply_markup=main_menu())
     except Exception:
         await call.message.answer("Выбирай действие:", reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "manual_input")
+async def cb_manual_input(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await call.message.edit_text("Ручной ввод:", reply_markup=manual_input_keyboard())
 
 
 @router.callback_query(F.data == "add_expense")
@@ -75,7 +96,7 @@ async def cb_add_expense(call: CallbackQuery, state: FSMContext):
     await state.update_data(tx_type="expense")
     await call.message.edit_text(
         "Выбери категорию расхода:",
-        reply_markup=categories_keyboard(categories, "cat"),
+        reply_markup=categories_keyboard(categories, "cat", back_callback="manual_input"),
     )
 
 
@@ -100,7 +121,29 @@ async def cb_add_income(call: CallbackQuery, state: FSMContext):
     await state.update_data(tx_type="income")
     await call.message.edit_text(
         "Выбери источник дохода:",
-        reply_markup=categories_keyboard(categories, "cat"),
+        reply_markup=categories_keyboard(categories, "cat", back_callback="manual_input"),
+    )
+
+
+@router.message(AddTransaction.choosing_category, F.text)
+async def msg_category_command(message: Message, state: FSMContext):
+    from app.services.category_commands import parse_category_command, apply_category_command
+
+    data = await state.get_data()
+    scope_type = data.get("tx_type")
+    command = await parse_category_command(message.from_user.id, message.text or "", scope_type)
+    if not command or command.get("intent") == "unknown":
+        await message.answer(
+            "Не понял команду. Можно выбрать категорию кнопкой или написать: «замени категорию X на Y».",
+        )
+        return
+
+    result = await apply_category_command(message.from_user.id, command, scope_type)
+    categories = await get_categories(message.from_user.id, type_=scope_type)
+    title = "Выбери категорию расхода:" if scope_type == "expense" else "Выбери источник дохода:"
+    await message.answer(
+        result + "\n\n" + title,
+        reply_markup=categories_keyboard(categories, "cat", back_callback="manual_input"),
     )
 
 
@@ -141,7 +184,7 @@ async def msg_comment(message: Message, state: FSMContext):
 
 async def _save_transaction(message: Message, state: FSMContext, comment: str):
     data = await state.get_data()
-    tx = await add_transaction(
+    tx = await create_transaction(
         user_id=message.from_user.id,
         category_id=data["category_id"],
         amount=data["amount"],
@@ -186,13 +229,9 @@ async def cb_report_month(call: CallbackQuery):
     return
 
 
-@router.callback_query(F.data.startswith("report:"))
-async def cb_report_by_month(call: CallbackQuery):
-    parts = call.data.split(":")
-    year, month = int(parts[1]), int(parts[2])
-    now = type("obj", (object,), {"year": year, "month": month})()
-    summary = await get_monthly_summary(call.from_user.id, year, month)
-    breakdown = await get_category_breakdown(call.from_user.id, year, month)
+async def render_month_report(user_id: int, year: int, month: int):
+    summary = await get_monthly_summary(user_id, year, month)
+    breakdown = await get_category_breakdown(user_id, year, month)
     month_name = str(year) + "-" + str(month).zfill(2)
     text = (
         f"📊 <b>Отчёт за {month_name}</b>\n\n"
@@ -211,7 +250,7 @@ async def cb_report_by_month(call: CallbackQuery):
     balance_pct = (balance / pct_base * 100) if pct_base else 0
 
     # Получаем все категории пользователя
-    all_cats = await get_categories(call.from_user.id)
+    all_cats = await get_categories(user_id)
     expense_cats = {cat['name']: 0.0 for cat in all_cats if cat.get('type') == 'expense'}
 
     # Заполняем суммами и kind из breakdown
@@ -242,6 +281,14 @@ async def cb_report_by_month(call: CallbackQuery):
         [InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
+    return text, kb
+
+
+@router.callback_query(F.data.startswith("report:"))
+async def cb_report_by_month(call: CallbackQuery):
+    parts = call.data.split(":")
+    year, month = int(parts[1]), int(parts[2])
+    text, kb = await render_month_report(call.from_user.id, year, month)
     await call.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
 
@@ -299,6 +346,26 @@ async def cb_delete_tx(call: CallbackQuery):
     await call.message.edit_text("Транзакция удалена.", reply_markup=main_menu())
 
 
+@router.callback_query(F.data.startswith("confirm_delete_intent:"))
+async def cb_confirm_delete_intent(call: CallbackQuery):
+    from app.database import delete_transaction_by_id
+
+    tx_id = int(call.data.split(":")[1])
+    success = await delete_transaction_by_id(call.from_user.id, tx_id)
+    text = f"Транзакция #{tx_id} удалена." if success else "Транзакция не найдена."
+    await call.message.edit_text(text, reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "cancel_delete_intent")
+async def cb_cancel_delete_intent(call: CallbackQuery):
+    await call.message.edit_text(
+        "Удаление отменено.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
 @router.callback_query(F.data.startswith("confirm:"))
 async def cb_confirm(call: CallbackQuery):
     await call.message.edit_reply_markup(reply_markup=main_menu())
@@ -329,73 +396,37 @@ async def msg_quick_input(message: Message, state: FSMContext):
     if current_state:
         return
 
-    from app.parser import parse_quick_input
-    from app.database import fetchone
-    parsed = parse_quick_input(message.text)
+    from app.services.transaction_ai import extract_transactions_from_text
 
-    if not parsed:
+    transactions = await extract_transactions_from_text(message.from_user.id, message.text or "", source="text")
+    if not transactions:
         return
 
-    categories = await get_categories(message.from_user.id, type_=parsed['type'])
-    category_id = None
-    kind = 'variable' if parsed['type'] == 'expense' else 'income'
-
-    if parsed['category_hint']:
-        for cat in categories:
-            if parsed['category_hint'].lower() in cat['name'].lower():
-                category_id = cat['id']
-                kind = cat['kind']
-                break
-
-    # Если знак не указан явно и нашли расходную категорию — меняем тип на расход
-    if not parsed.get('sign_explicit', True) and parsed['category_hint']:
-        for cat in categories:
-            if parsed['category_hint'].lower() in cat['name'].lower():
-                if cat['type'] == 'expense':
-                    parsed['type'] = 'expense'
-                    categories = await get_categories(message.from_user.id, type_='expense')
-                break
-
-    if not category_id and categories:
-        # Ищем "Прочие расходы" или "Прочие доходы" как дефолт
-        default_name = 'Прочие расходы' if parsed["type"] == 'expense' else 'Прочие доходы'
-        for cat in categories:
-            if default_name.lower() in cat['name'].lower():
-                category_id = cat['id']
-                kind = cat['kind']
-                break
-        if not category_id:
-            category_id = categories[0]['id']
-            kind = categories[0]['kind']
-
-    if not category_id:
-        await message.answer("❌ Не нашёл подходящую категорию.")
-        return
-
-    row = await fetchone(
-        """INSERT INTO transactions
-           (user_id, category_id, amount, type, kind, comment,
-            transaction_date, wallet, pnl_period)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (message.from_user.id, category_id, parsed['amount'],
-         parsed['type'], kind, parsed['comment'],
-         parsed['transaction_date'], parsed['wallet'], parsed['pnl_period'])
+    tx = transactions[0]
+    saved = await create_transaction(
+        user_id=message.from_user.id,
+        category_id=tx["category_id"],
+        amount=tx["amount"],
+        type_=tx["type"],
+        kind=tx.get("kind"),
+        comment=tx.get("comment") or "",
+        transaction_date=tx.get("transaction_date"),
+        pnl_period=tx.get("pnl_period"),
     )
 
-    tx_id = row[0]
-    sign = "−" if parsed['type'] == 'expense' else "+"
-    wallet_names = {'cash': '💵 Нал', 'card': '💳 Безнал', 'other': '🔄 Другое'}
-    date_str = parsed['transaction_date'].strftime('%d.%m')
+    sign = "−" if tx["type"] == "expense" else "+"
+    date_str = tx["transaction_date"].strftime("%d.%m")
 
     text = (
         f"✅ <b>Записано!</b>\n\n"
-        f"{sign}{parsed['amount']:,.0f} ₽\n"
-        f"📅 {date_str}  {wallet_names.get(parsed['wallet'], '')}\n"
+        f"{sign}{tx['amount']:,.0f} ₽\n"
+        f"📂 {tx['category_name']}\n"
+        f"📅 {date_str}\n"
     )
-    if parsed['comment']:
-        text += f"💬 {parsed['comment']}\n"
-    if parsed['pnl_period']:
-        text += f"📊 ПнЛ: {parsed['pnl_period']}\n"
+    if tx.get("comment"):
+        text += f"💬 {tx['comment']}\n"
+    if tx.get("pnl_period"):
+        text += f"📊 ПнЛ: {tx['pnl_period']}\n"
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     await message.answer(
@@ -403,8 +434,8 @@ async def msg_quick_input(message: Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Верно", callback_data=f"confirm:{tx_id}"),
-                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_tx:{tx_id}"),
+                InlineKeyboardButton(text="✅ Верно", callback_data=f"confirm:{saved['id']}"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_tx:{saved['id']}"),
             ],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ])
@@ -817,17 +848,16 @@ async def cb_export_excel(call: CallbackQuery):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Транзакции"
-    ws.append(["#", "Дата", "Сумма", "Тип", "Категория", "Кошелёк", "Комментарий", "ПнЛ период"])
+    ws.append(["#", "Дата", "Сумма", "Тип", "Категория", "Комментарий", "ПнЛ период"])
 
     for tx in txs:
-        tx_id, date, amount, type_, cat, wallet, comment, pnl = tx
+        tx_id, date, amount, type_, cat, comment, pnl = tx
         ws.append([
             tx_id,
             date.strftime("%d.%m.%Y"),
             float(amount) if type_ == "income" else -float(amount),
             "Доход" if type_ == "income" else "Расход",
             cat or "",
-            wallet or "",
             comment or "",
             pnl or "",
         ])
@@ -1059,7 +1089,7 @@ BOT_KNOWLEDGE = """
 Вот что умеет бот:
 
 📥 РАСХОДЫ И ДОХОДЫ
-- Кнопка "Расход" или "Доход" → выбери категорию → введи сумму → опционально комментарий
+- Кнопка "Ручной ввод" → выбери расход или доход → выбери категорию → введи сумму → опционально комментарий
 - Быстрый ввод текстом: просто напиши сумму, например "500" или "-500 кофе"
 - Голосом: надиктуй трату, например "потратил 300 рублей на продукты" (недоступно на тарифе Скан и текст)
 
@@ -1128,7 +1158,7 @@ async def cmd_offer(message: Message):
 async def cmd_help(message: Message):
     text = (
         "📌 Основные функции бота «Баланс»\n\n"
-        "➕ Расход / 💰 Доход — записать трату или поступление (кнопкой, текстом или голосом)\n"
+        "✍️ Ручной ввод — записать трату или поступление (кнопкой, текстом или голосом)\n"
         "📋 Последние — история операций, можно редактировать и удалять\n"
         "📊 Отчёты — календарь, отчёт ДДС, графики, выгрузка в Excel (Премиум)\n"
         "🤖 ИИ-ассистент — финансовый советник на GPT-4o, на Премиум — свободные беседы на любые темы\n"
@@ -1160,7 +1190,7 @@ async def cmd_help(message: Message):
     ]))
 
 
-async def answer_help_question(user_text: str, bot_answer_func):
+async def answer_help_question(user_text: str, bot_answer_func=None):
     """Отвечает на вопрос о работе бота через GPT"""
     import httpx, os
     async with httpx.AsyncClient() as client:
@@ -1184,12 +1214,151 @@ async def answer_help_question(user_text: str, bot_answer_func):
         return data["choices"][0]["message"]["content"]
 
 
-@router.message(F.text, StateFilter(default_state))
-async def msg_free_text(message: Message):
-    from app.database import get_user_tier, get_categories, add_transaction
-    from app.parser import parse_quick_input
-    from app.handlers.voice import parse_voice_to_transaction
+def _format_tx_preview(tx) -> str:
+    tx_id, tx_date, amount, type_, comment, category = tx
+    sign = "-" if type_ == "expense" else "+"
+    comment_part = f" {comment}" if comment else ""
+    return f"#{tx_id} {tx_date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {category or ''}{comment_part}"
 
+
+async def handle_intent_message(message: Message, state: FSMContext, text: str, source: str = "text") -> bool:
+    from app.database import (
+        get_last_transaction,
+        get_transaction_by_id,
+        delete_transaction_by_id,
+    )
+    from app.services.category_commands import apply_category_command
+    from app.services.intent_router import parse_user_intent
+
+    intent = await parse_user_intent(message.from_user.id, text, source)
+    name = intent.get("intent")
+    params = intent.get("params", {})
+
+    if name == "unknown":
+        return False
+
+    if name == "open_main_menu":
+        await state.clear()
+        await message.answer("Выбирай действие:", reply_markup=main_menu())
+        return True
+
+    if name == "show_report":
+        report_text, kb = await render_month_report(
+            message.from_user.id,
+            int(params["year"]),
+            int(params["month"]),
+        )
+        await message.answer(report_text, parse_mode="HTML", reply_markup=kb)
+        return True
+
+    if name == "show_recent":
+        txs = await get_recent_transactions(message.from_user.id, limit=10)
+        if not txs:
+            await message.answer(
+                "Пока нет транзакций.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+        lines = []
+        for tx in txs:
+            sign = "-" if tx["type"] == "expense" else "+"
+            date_value = tx["transaction_date"].strftime("%d.%m")
+            comment = f" | {tx['comment']}" if tx.get("comment") else ""
+            lines.append(
+                f"#{tx['id']} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
+                f"{tx.get('category_name') or ''}{comment}"
+            )
+        await message.answer(
+            "Последние транзакции:\n\n" + "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Открыть список", callback_data="recent")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
+    if name == "show_calendar":
+        await message.answer(
+            "Открываю платёжный календарь.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
+    if name == "delete_transaction":
+        tx = None
+        tx_id = params.get("tx_id")
+        if tx_id:
+            tx = await get_transaction_by_id(message.from_user.id, tx_id)
+        elif params.get("last"):
+            tx = await get_last_transaction(message.from_user.id)
+
+        if not tx:
+            await message.answer(
+                "Не нашёл транзакцию для удаления. Напиши номер, например: «удали транзакцию 42».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        await message.answer(
+            "Вы имеете в виду эту транзакцию?\n" + _format_tx_preview(tx),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Да, удалить", callback_data=f"confirm_delete_intent:{tx[0]}"),
+                    InlineKeyboardButton(text="Отмена", callback_data="cancel_delete_intent"),
+                ],
+            ]),
+        )
+        return True
+
+    if name in ("rename_category", "add_category", "delete_category", "set_category_kind"):
+        scope_type = params.get("scope_type", "expense")
+        result = await apply_category_command(message.from_user.id, params.get("command"), scope_type)
+        await message.answer(
+            result,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Ручной ввод", callback_data="manual_input")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
+    if name == "add_transaction":
+        added = []
+        for tx in params.get("transactions", []):
+            saved = await create_transaction(
+                user_id=message.from_user.id,
+                category_id=tx["category_id"],
+                amount=tx["amount"],
+                type_=tx["type"],
+                kind=tx.get("kind"),
+                comment=tx.get("comment") or "",
+                transaction_date=tx.get("transaction_date"),
+                pnl_period=tx.get("pnl_period"),
+            )
+            sign = "-" if tx["type"] == "expense" else "+"
+            added.append(f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{saved['id']}")
+
+        if added:
+            await message.answer(
+                "Записано:\n" + "\n".join(added),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+    return False
+
+
+@router.message(F.text, StateFilter(default_state))
+async def msg_free_text(message: Message, state: FSMContext):
     # Игнорируем команды
     if message.text.startswith('/'):
         return
@@ -1212,109 +1381,9 @@ async def msg_free_text(message: Message):
             await message.answer("Ошибка хелпера: " + str(e))
         return
 
-    tier = await get_user_tier(message.from_user.id)
-
-    # Пробуем распарсить как быстрый ввод
-    parsed = parse_quick_input(message.text)
-    if parsed and parsed.get('amount'):
-        categories = await get_categories(message.from_user.id)
-        amount = parsed.get('amount')
-        type_ = parsed.get('type', 'expense')
-        hint = parsed.get('category_hint', '')
-
-        category_id = None
-        category_name = ''
-        for cat in categories:
-            if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
-                category_id = cat['id']
-                category_name = cat['name']
-                break
-        if not category_id:
-            for cat in categories:
-                if cat.get('type') == type_:
-                    category_id = cat['id']
-                    category_name = cat['name']
-                    break
-
-        if category_id:
-            await add_transaction(
-                message.from_user.id,
-                category_id=category_id,
-                amount=amount,
-                type_=type_,
-                kind=parsed.get('kind', 'variable'),
-                comment=message.text
-            )
-            sign = "-" if type_ == 'expense' else "+"
-            await message.answer(
-                "Записано: " + sign + str(int(amount)) + " руб. — " + category_name,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ])
-            )
-            return
-
-    # Если не распарсилось — пробуем через GPT
-    if tier == 'free':
+    handled = await handle_intent_message(message, state, message.text, source="text")
+    if not handled:
         return
-
-    thinking = await message.answer("Думаю...")
-    try:
-        tx_lines = await parse_voice_to_transaction(message.text)
-        categories = await get_categories(message.from_user.id)
-        added = []
-
-        for tx_str in tx_lines:
-            parsed = parse_quick_input(tx_str)
-            if not parsed or not parsed.get('amount'):
-                continue
-            amount = parsed.get('amount')
-            type_ = parsed.get('type', 'expense')
-            hint = parsed.get('category_hint', '')
-
-            category_id = None
-            category_name = ''
-            for cat in categories:
-                if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
-                    category_id = cat['id']
-                    category_name = cat['name']
-                    break
-            if not category_id:
-                for cat in categories:
-                    if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
-                        category_id = cat['id']
-                        category_name = cat['name']
-                        break
-            if not category_id:
-                for cat in categories:
-                    if cat.get('type') == type_:
-                        category_id = cat['id']
-                        category_name = cat['name']
-                        break
-
-            if category_id:
-                await add_transaction(
-                    message.from_user.id,
-                    category_id=category_id,
-                    amount=amount,
-                    type_=type_,
-                    kind=parsed.get('kind', 'variable'),
-                    comment=message.text
-                )
-                sign = "-" if type_ == 'expense' else "+"
-                added.append(sign + str(int(amount)) + " руб. — " + category_name)
-
-        await thinking.delete()
-        if added:
-            await message.answer(
-                "Записано: " + ", ".join(added),
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ])
-            )
-    except Exception as e:
-        await thinking.delete()
-        await message.answer("Ошибка: " + str(e))
 
 
 @router.message(Command("category"))
@@ -1364,9 +1433,10 @@ async def cmd_category(message: Message):
             await message.answer('Формат: /category add "Название" expense')
             return
         name = m[0]
+        kind = "income" if type_ == "income" else "variable"
         await execute(
-            "INSERT INTO categories (user_id, name, type_, kind) VALUES (%s, %s, %s, 'variable') ON CONFLICT DO NOTHING",
-            (message.from_user.id, name, type_)
+            "INSERT INTO categories (user_id, name, type, kind) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+            (message.from_user.id, name, type_, kind)
         )
         type_ru = "доход" if type_ == 'income' else "расход"
         await message.answer(f'Категория "{name}" ({type_ru}) добавлена.')

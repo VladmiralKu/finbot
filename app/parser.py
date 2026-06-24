@@ -18,12 +18,6 @@ MONTHS_RU = {
     'декабрь': 12, 'декабря': 12, 'dec': 12,
 }
 
-WALLETS = {
-    'нал': 'cash', 'наличные': 'cash', 'наличка': 'cash', 'cash': 'cash',
-    'бн': 'card', 'безнал': 'card', 'карта': 'card', 'card': 'card',
-    'другое': 'other', 'др': 'other', 'other': 'other',
-}
-
 CATEGORY_HINTS = {
     'продукт': 'Еда / Продукты', 'еда': 'Еда / Продукты', 'магазин': 'Еда / Продукты',
     'такси': 'Транспорт', 'метро': 'Транспорт', 'бензин': 'Транспорт', 'транспорт': 'Транспорт',
@@ -53,8 +47,9 @@ def parse_quick_input(text: str) -> dict:
         'transaction_date': date.today(),
         'category_hint': None,
         'comment': '',
-        'wallet': 'card',
+        'wallet': 'cash',
         'pnl_period': None,
+        'sign_explicit': False,
     }
 
     text = text.strip()
@@ -82,8 +77,10 @@ def parse_quick_input(text: str) -> dict:
 
     if text.startswith('-'):
         result['type'] = 'expense'
+        result['sign_explicit'] = True
     elif text.startswith('+'):
         result['type'] = 'income'
+        result['sign_explicit'] = True
     else:
         result['type'] = 'expense'  # по умолчанию расход
 
@@ -113,12 +110,6 @@ def parse_quick_input(text: str) -> dict:
                 used_words.add(i)
             except:
                 pass
-
-    # Кошелёк
-    for i, word in enumerate(words):
-        if word in WALLETS:
-            result['wallet'] = WALLETS[word]
-            used_words.add(i)
 
     # ПнЛ период (на + месяц)
     for i, word in enumerate(words):

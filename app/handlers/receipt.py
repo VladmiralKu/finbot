@@ -58,8 +58,9 @@ async def scan_receipt_with_ai(image_bytes: bytes) -> str:
 
 @router.message(F.photo)
 async def msg_photo_receipt(message: Message):
-    from app.database import get_user_tier, get_categories, add_transaction
-    from app.parser import parse_quick_input
+    from app.database import get_user_tier
+    from app.services.category_matcher import match_category
+    from app.services.transaction_service import create_transaction
 
     tier = await get_user_tier(message.from_user.id)
     if tier == 'free':
@@ -87,7 +88,6 @@ async def msg_photo_receipt(message: Message):
         await message.answer("GPT: " + result[:300])
 
         # Парсим итоговую сумму из ответа GPT
-        categories = await get_categories(message.from_user.id)
         added = []
 
         import re as _re
@@ -104,35 +104,24 @@ async def msg_photo_receipt(message: Message):
                 pass
 
         if amount_found:
-            category_id = None
-            category_name = ""
-            for cat in categories:
-                if "еда" in cat["name"].lower() and cat["type"] == "expense":
-                    category_id = cat["id"]
-                    category_name = cat["name"]
-                    break
-            if not category_id:
-                for cat in categories:
-                    if "прочие" in cat["name"].lower() and cat["type"] == "expense":
-                        category_id = cat["id"]
-                        category_name = cat["name"]
-                        break
-            if not category_id:
-                for cat in categories:
-                    if cat["type"] == "expense":
-                        category_id = cat["id"]
-                        category_name = cat["name"]
-                        break
-            if category_id:
-                await add_transaction(
-                    message.from_user.id,
-                    category_id=category_id,
+            category = await match_category(
+                message.from_user.id,
+                "чек продукты магазин покупка",
+                type_hint="expense",
+                amount=amount_found,
+                source="receipt",
+            )
+            if category:
+                await create_transaction(
+                    user_id=message.from_user.id,
+                    category_id=category["category_id"],
                     amount=amount_found,
                     type_="expense",
-                    kind="variable",
-                    comment="Чек"
+                    kind=category["kind"],
+                    comment="Чек",
+                    receipt_photo_id=photo.file_id,
                 )
-                added.append("-" + str(int(amount_found)) + " руб. — " + category_name)
+                added.append("-" + str(int(amount_found)) + " руб. — " + category["category_name"])
 
         if added:
             text = "Чек распознан! Внесено:\n" + "\n".join(added)

@@ -1,6 +1,6 @@
 import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from app.database import get_todays_reminders, mark_reminder_sent
+from app.database import get_todays_reminders, touch_reminder_sent
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 logger = logging.getLogger(__name__)
@@ -18,19 +18,20 @@ async def send_reminders(bot):
             from datetime import date
             days_left = (next_date - date.today()).days
 
-            if days_left == 0:
-                text = (f"💸 <b>Сегодня платёж!</b>\n\n"
+            if days_left <= 0:
+                title = "Сегодня платёж!" if days_left == 0 else "Платёж просрочен"
+                text = (f"💸 <b>{title}</b>\n\n"
                         f"📌 {name} — {amount:,.0f} ₽\n\n"
-                        f"Оплачено?")
+                        f"Напомнил. Транзакцию внеси отдельно после оплаты.")
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="✅ Оплачено", callback_data=f"paid:{payment_id}:{int(amount)}"),
+                        InlineKeyboardButton(text="✅ Уже оплатил", callback_data=f"reminder_ack:{payment_id}"),
                         InlineKeyboardButton(text="❌ Нет", callback_data=f"postpone:{payment_id}"),
                     ]
                 ])
                 try:
                     await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
-                    await mark_reminder_sent(payment_id)
+                    await touch_reminder_sent(payment_id)
                 except Exception as e:
                     logger.error(f"Failed to send reminder to {user_id}: {e}")
             else:
@@ -40,7 +41,7 @@ async def send_reminders(bot):
                         f"Проверь баланс заранее!")
                 try:
                     await bot.send_message(user_id, text, parse_mode="HTML")
-                    await mark_reminder_sent(payment_id)
+                    await touch_reminder_sent(payment_id)
                 except Exception as e:
                     logger.error(f"Failed to send reminder to {user_id}: {e}")
 

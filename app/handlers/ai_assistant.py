@@ -120,7 +120,7 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
             "- Не повторяй контекст пользователю дословно\n\n"
             "ДЕЙСТВИЯ (добавляй в конец ответа если нужно, только если разговор финансовый):\n"
             "Для внесения транзакции:\n"
-            "TRANSACTION: -1500 Еда/Продукты нал\n"
+            "TRANSACTION: -1500 Еда/Продукты\n"
             "Для сохранения цели:\n"
             "GOAL: накопить 200000 к августу 2026\n"
             "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
@@ -146,7 +146,7 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
         "- Не повторяй контекст пользователю дословно\n\n"
         "ДЕЙСТВИЯ (добавляй в конец ответа если нужно):\n"
         "Для внесения транзакции:\n"
-        "TRANSACTION: -1500 Еда/Продукты нал\n"
+        "TRANSACTION: -1500 Еда/Продукты\n"
         "Для сохранения цели:\n"
         "GOAL: накопить 200000 к августу 2026\n"
         "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
@@ -211,8 +211,9 @@ async def log_ai_usage(user_id: int):
 
 
 async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
-    from app.parser import parse_quick_input
-    from app.database import get_categories, add_transaction, execute
+    from app.database import execute
+    from app.services.transaction_ai import extract_transactions_from_text
+    from app.services.transaction_service import create_transaction
     actions_log = ""
     clean_lines = []
 
@@ -220,32 +221,19 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
         if line.startswith("TRANSACTION:"):
             tx_str = line.replace("TRANSACTION:", "").strip()
             try:
-                categories = await get_categories(user_id)
-                parsed = parse_quick_input(tx_str)
-                if parsed and parsed.get('amount'):
-                    hint = parsed.get('category_hint', '')
-                    type_ = parsed.get('type', 'expense')
-                    category_id = None
-                    for cat in categories:
-                        if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
-                            category_id = cat['id']
-                            type_ = cat.get('type', type_)
-                            break
-                    if not category_id:
-                        for cat in categories:
-                            if cat.get('type') == type_:
-                                category_id = cat['id']
-                                break
-                    if category_id:
-                        await add_transaction(
-                            user_id,
-                            category_id=category_id,
-                            amount=parsed['amount'],
-                            type_=type_,
-                            kind=parsed.get('kind', 'variable'),
-                            comment=parsed.get('comment', '')
-                        )
-                        actions_log += "\nТранзакция внесена!"
+                transactions = await extract_transactions_from_text(user_id, tx_str, source="ai")
+                for tx in transactions:
+                    await create_transaction(
+                        user_id=user_id,
+                        category_id=tx["category_id"],
+                        amount=tx["amount"],
+                        type_=tx["type"],
+                        kind=tx.get("kind"),
+                        comment=tx.get("comment") or "",
+                        transaction_date=tx.get("transaction_date"),
+                        pnl_period=tx.get("pnl_period"),
+                    )
+                    actions_log += "\nТранзакция внесена!"
             except Exception as e:
                 actions_log += "\nОшибка внесения транзакции: " + str(e)
         elif line.startswith("GOAL:"):
@@ -372,13 +360,14 @@ async def msg_ai_voice(message: Message, state: FSMContext):
         if not text:
             await thinking.edit_text("Не удалось распознать голос.")
             return
-        await thinking.edit_text("Распознано: " + text)
-        # Обрабатываем напрямую как ИИ-запрос
-        from app.database import get_ai_history, save_ai_message
-        history = await get_ai_history(message.from_user.id)
+        await thinking.delete()
+        data = await state.get_data()
+        history = data.get('history', [])
+        from app.database import save_ai_message
         from app.database import get_user_tier
         tier = await get_user_tier(message.from_user.id)
         ai_text, new_history = await get_ai_response(message.from_user.id, text, history, tier=tier)
+        await state.update_data(history=new_history[-20:])
         await save_ai_message(message.from_user.id, 'user', text)
         await save_ai_message(message.from_user.id, 'assistant', ai_text)
         await log_ai_usage(message.from_user.id)

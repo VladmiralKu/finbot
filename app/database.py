@@ -83,12 +83,31 @@ async def get_categories(user_id, type_=None):
     return [{"id": r[0], "name": r[1], "type": r[2], "kind": r[3]} for r in rows]
 
 
-async def add_transaction(user_id, category_id, amount, type_, kind, comment="", receipt_photo_id=None):
+async def add_transaction(
+    user_id,
+    category_id,
+    amount,
+    type_,
+    kind,
+    comment="",
+    receipt_photo_id=None,
+    transaction_date=None,
+    pnl_period=None,
+    import_hash=None,
+):
+    from datetime import date
     amount = abs(amount)
+    if transaction_date is None:
+        transaction_date = date.today()
     row = await fetchone(
-        """INSERT INTO transactions (user_id, category_id, amount, type, kind, comment, receipt_photo_id)
-           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (user_id, category_id, amount, type_, kind, comment, receipt_photo_id),
+        """INSERT INTO transactions
+           (user_id, category_id, amount, type, kind, comment, receipt_photo_id,
+            transaction_date, wallet, pnl_period, import_hash)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'cash',%s,%s) RETURNING id""",
+        (
+            user_id, category_id, amount, type_, kind, comment, receipt_photo_id,
+            transaction_date, pnl_period, import_hash,
+        ),
     )
     return {"id": row[0]}
 
@@ -217,11 +236,18 @@ async def get_todays_reminders():
            JOIN users u ON r.user_id = u.id
            WHERE r.is_active = TRUE
              AND r.next_trigger_date - r.remind_days_before <= %s
-             AND r.next_trigger_date >= %s
              AND (r.last_triggered_at IS NULL OR r.last_triggered_at::date < %s)""",
-        (today, today, today)
+        (today, today)
     )
     return rows
+
+
+async def touch_reminder_sent(payment_id):
+    from datetime import datetime
+    await execute(
+        "UPDATE recurring_payments SET last_triggered_at = %s WHERE id = %s",
+        (datetime.now(), payment_id)
+    )
 
 
 async def mark_reminder_sent(payment_id):
@@ -375,6 +401,7 @@ async def can_use_feature(user_id, feature):
         'export': data.get('has_export', False),
         'business_tools': data.get('has_business_tools', False),
         'dashboard': data.get('dashboards_per_month', 0),
+        'excel_import': data.get('excel_imports_per_month', 0),
     }
     return feature_map.get(feature, False)
 
@@ -515,7 +542,7 @@ async def get_transactions_by_month(user_id, year, month):
 async def get_all_transactions_for_export(user_id):
     rows = await fetchall(
         """SELECT t.id, t.transaction_date, t.amount, t.type,
-                  c.name as category_name, t.wallet, t.comment, t.pnl_period
+                  c.name as category_name, t.comment, t.pnl_period
            FROM transactions t
            LEFT JOIN categories c ON t.category_id = c.id
            WHERE t.user_id = %s
@@ -523,6 +550,36 @@ async def get_all_transactions_for_export(user_id):
         (user_id,)
     )
     return rows
+
+
+async def get_transaction_by_id(user_id, tx_id):
+    return await fetchone(
+        """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment, c.name
+           FROM transactions t
+           LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id=%s AND t.id=%s""",
+        (user_id, tx_id),
+    )
+
+
+async def get_last_transaction(user_id):
+    return await fetchone(
+        """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment, c.name
+           FROM transactions t
+           LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id=%s
+           ORDER BY t.created_at DESC, t.id DESC
+           LIMIT 1""",
+        (user_id,),
+    )
+
+
+async def import_hash_exists(user_id, import_hash):
+    row = await fetchone(
+        "SELECT id FROM transactions WHERE user_id=%s AND import_hash=%s LIMIT 1",
+        (user_id, import_hash),
+    )
+    return bool(row)
 
 
 async def delete_transaction_by_id(user_id, tx_id):
@@ -607,7 +664,7 @@ async def get_ai_history(user_id: int, limit: int = 20) -> list:
             "SELECT role, content FROM ai_history WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
             (user_id, limit)
         )
-        return list(reversed([{"role": r["role"], "content": r["content"]} for r in rows]))
+        return list(reversed([{"role": r[0], "content": r[1]} for r in rows]))
     except Exception:
         return []
 
