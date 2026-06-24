@@ -595,8 +595,11 @@ async def cb_dashboard(call: CallbackQuery):
 @router.callback_query(F.data.startswith("txlist:"))
 async def cb_txlist(call: CallbackQuery):
     from app.database import get_transactions_by_month
-    _, year, month = call.data.split(":")
+    await call.answer()
+    parts = call.data.split(":")
+    _, year, month = parts[:3]
     year, month = int(year), int(month)
+    offset = int(parts[3]) if len(parts) > 3 else 0
     txs = await get_transactions_by_month(call.from_user.id, year, month)
 
     MONTHS = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
@@ -612,21 +615,37 @@ async def cb_txlist(call: CallbackQuery):
         )
         return
 
-    text = f"Транзакции за {MONTHS[month]} {year}\n\n"
-    for tx in txs:
+    page_size = 30
+    page = txs[offset:offset + page_size]
+    text = f"Транзакции за {MONTHS[month]} {year}\n"
+    text += f"{offset + 1}-{min(offset + page_size, len(txs))} из {len(txs)}\n\n"
+    for tx in page:
         tx_id, date, amount, type_, comment, cat_name, wallet = tx
         sign = "-" if type_ == "expense" else "+"
         comment_str = f" | {comment}" if comment else ""
-        text += f"#{tx_id} {date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {cat_name or ''}{comment_str}\n"
+        line = f"#{tx_id} {date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {cat_name or ''}{comment_str}\n"
+        if len(text) + len(line) > 3500:
+            break
+        text += line
+
+    buttons = []
+    nav = []
+    if offset > 0:
+        nav.append(InlineKeyboardButton(text="◀ Назад", callback_data=f"txlist:{year}:{month}:{max(0, offset-page_size)}"))
+    if offset + page_size < len(txs):
+        nav.append(InlineKeyboardButton(text="Ещё ▶", callback_data=f"txlist:{year}:{month}:{offset+page_size}"))
+    if nav:
+        buttons.append(nav)
+    buttons.extend([
+        [InlineKeyboardButton(text="✏️ Изменить транзакцию", callback_data=f"edit_by_id:{year}:{month}")],
+        [InlineKeyboardButton(text="🗑 Удалить транзакцию", callback_data="delete_by_id")],
+        [InlineKeyboardButton(text="Назад", callback_data="recent")],
+    ])
 
     await call.message.edit_text(
         text,
         parse_mode=None,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ Изменить транзакцию", callback_data=f"edit_by_id:{year}:{month}")],
-            [InlineKeyboardButton(text="🗑 Удалить транзакцию", callback_data="delete_by_id")],
-            [InlineKeyboardButton(text="Назад", callback_data="recent")],
-        ])
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
 
@@ -1435,12 +1454,8 @@ async def cb_ask_ai_pending(call: CallbackQuery, state: FSMContext):
     await send_text_to_ai_assistant(call.message, state, call.from_user.id, user_text)
 
 
-@router.message(F.text, StateFilter(default_state))
+@router.message(F.text & ~F.text.startswith("/"), StateFilter(default_state))
 async def msg_free_text(message: Message, state: FSMContext):
-    # Игнорируем команды
-    if message.text.startswith('/'):
-        return
-
     # ИИ-хелпер — триггер по ключевым фразам
     text_lower = message.text.lower().strip()
     if any(trigger in text_lower for trigger in HELP_TRIGGERS):
