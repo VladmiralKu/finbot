@@ -255,6 +255,7 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
 
 @router.callback_query(F.data == "ai_assistant")
 async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
+    await call.answer()
     from app.database import get_user_tier
     tier = await get_user_tier(call.from_user.id)
     if tier == 'free':

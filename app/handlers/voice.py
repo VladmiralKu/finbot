@@ -163,7 +163,12 @@ async def msg_voice(message: Message, state: FSMContext):
                 ])
             )
         else:
-            from app.handlers.main import HELP_TRIGGERS, answer_help_question, handle_intent_message
+            from app.handlers.main import (
+                HELP_TRIGGERS,
+                answer_help_question,
+                handle_intent_message,
+                send_text_to_ai_assistant,
+            )
             text_lower = text.lower().strip()
             if any(trigger in text_lower for trigger in HELP_TRIGGERS):
                 thinking2 = await message.answer("Сейчас расскажу...")
@@ -183,12 +188,7 @@ async def msg_voice(message: Message, state: FSMContext):
 
             handled = await handle_intent_message(message, state, text, source="voice")
             if not handled:
-                await message.answer(
-                    "Не понял команду. Можно сказать, например: «500 рублей на продукты» или «покажи отчёт за июнь».",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                    ])
-                )
+                await send_text_to_ai_assistant(message, state, message.from_user.id, text)
 
     except Exception as e:
         try:

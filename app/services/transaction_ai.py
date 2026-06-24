@@ -65,6 +65,8 @@ def _normalize_income_aliases(text: str) -> str:
     text = re.sub(r"\bз\s*/\s*п\b", "зарплата", text, flags=re.IGNORECASE)
     text = re.sub(r"\bз\s*\.\s*п\s*\.?\b", "зарплата", text, flags=re.IGNORECASE)
     text = re.sub(r"\bзп\b", "зарплата", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bз\s+п\b", "зарплата", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bза\s+п(?=\s+\d)", "зарплата", text, flags=re.IGNORECASE)
     return text
 
 
@@ -109,6 +111,12 @@ def _words_to_number(phrase: str) -> float | None:
 
 def _normalize_amount_phrases(text: str) -> str:
     result = text
+
+    result = re.sub(
+        r"(?<!\d)([+-]?\d{1,3}(?:\s+\d{3})+)(?!\d)",
+        lambda m: m.group(1).replace(" ", ""),
+        result,
+    )
 
     for word, amount in SLANG_THOUSANDS.items():
         result = re.sub(rf"\b{re.escape(word)}\b", str(amount), result, flags=re.IGNORECASE)

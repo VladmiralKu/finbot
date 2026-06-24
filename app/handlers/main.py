@@ -1357,6 +1357,84 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
     return False
 
 
+async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id: int, user_text: str):
+    from app.database import get_user_tier
+    from app.handlers.ai_assistant import (
+        AIState,
+        check_ai_limit,
+        get_ai_response,
+        log_ai_usage,
+        process_actions,
+    )
+
+    tier = await get_user_tier(user_id)
+    if tier == "free":
+        await message.answer(
+            "ИИ-ассистент доступен с тарифа Старт.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    can, used, limit = await check_ai_limit(user_id)
+    if not can:
+        await message.answer(
+            "Лимит ИИ-ассистента исчерпан на этот месяц.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    await state.set_state(AIState.chatting)
+    thinking = await message.answer("Передаю в ИИ-ассистент...")
+    try:
+        ai_text, new_history = await get_ai_response(user_id, user_text, [], tier=tier)
+        await state.update_data(history=new_history[-20:])
+        await log_ai_usage(user_id)
+        clean_text, actions_log = await process_actions(user_id, ai_text)
+        await thinking.delete()
+        limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
+        await message.answer(
+            "🗣️ " + clean_text + actions_log + "\n\n[" + limit_str + "]",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
+            ]),
+        )
+    except Exception as e:
+        try:
+            await thinking.delete()
+        except Exception:
+            pass
+        await message.answer(
+            "Не смог передать в ИИ-ассистент: " + str(e),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+
+
+@router.callback_query(F.data == "ask_ai_pending")
+async def cb_ask_ai_pending(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    user_text = data.get("ai_pending_text")
+    if not user_text:
+        await call.message.answer(
+            "Не нашёл текст для ИИ. Напиши вопрос ещё раз.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="ИИ-ассистент", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+    await send_text_to_ai_assistant(call.message, state, call.from_user.id, user_text)
+
+
 @router.message(F.text, StateFilter(default_state))
 async def msg_free_text(message: Message, state: FSMContext):
     # Игнорируем команды
@@ -1383,6 +1461,15 @@ async def msg_free_text(message: Message, state: FSMContext):
 
     handled = await handle_intent_message(message, state, message.text, source="text")
     if not handled:
+        await state.update_data(ai_pending_text=message.text)
+        await message.answer(
+            "Не понял это как транзакцию или команду. Могу передать фразу в ИИ-ассистент.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Спросить ИИ", callback_data="ask_ai_pending")],
+                [InlineKeyboardButton(text="Открыть ИИ-ассистент", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
         return
 
 
