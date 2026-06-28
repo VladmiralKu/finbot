@@ -44,10 +44,10 @@ async def get_user_context(user_id: int) -> str:
 
     # Цели пользователя
     goals = await fetchall(
-        "SELECT goal_text FROM user_goals WHERE user_id = %s ORDER BY updated_at DESC LIMIT 5",
+        "SELECT id, goal_text FROM user_goals WHERE user_id = %s ORDER BY updated_at DESC LIMIT 5",
         (user_id,)
     )
-    goals_str = "\n".join(["- " + g[0] for g in goals]) if goals else "не заданы"
+    goals_str = "\n".join(["- #" + str(g[0]) + " " + g[1] for g in goals]) if goals else "не заданы"
 
     # Последние 20 транзакций с комментариями
     recent_txs = await fetchall(
@@ -123,6 +123,9 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
             "TRANSACTION: -1500 Еда/Продукты\n"
             "Для сохранения цели:\n"
             "GOAL: накопить 200000 к августу 2026\n"
+            "Для удаления неактуальной цели:\n"
+            "DELETE_GOAL: #12\n"
+            "Если номера нет, можно написать текст цели: DELETE_GOAL: накопить 200000\n"
             "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
             + context
         )
@@ -149,6 +152,9 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
         "TRANSACTION: -1500 Еда/Продукты\n"
         "Для сохранения цели:\n"
         "GOAL: накопить 200000 к августу 2026\n"
+        "Для удаления неактуальной цели:\n"
+        "DELETE_GOAL: #12\n"
+        "Если номера нет, можно написать текст цели: DELETE_GOAL: накопить 200000\n"
         "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
             + context
         )
@@ -210,6 +216,51 @@ async def log_ai_usage(user_id: int):
     )
 
 
+def _normalize_goal_text(text: str) -> str:
+    return " ".join((text or "").lower().replace("#", "").split())
+
+
+async def delete_goal_by_query(user_id: int, query: str) -> tuple[bool, str]:
+    from app.database import execute, fetchall
+
+    clean_query = _normalize_goal_text(query)
+    if not clean_query:
+        return False, "Не понял, какую цель удалить."
+
+    if clean_query.isdigit():
+        row_count = await execute(
+            "DELETE FROM user_goals WHERE user_id = %s AND id = %s",
+            (user_id, int(clean_query)),
+        )
+        if row_count:
+            return True, "Цель удалена!"
+        return False, "Не нашёл цель с таким номером."
+
+    goals = await fetchall(
+        "SELECT id, goal_text FROM user_goals WHERE user_id = %s ORDER BY updated_at DESC",
+        (user_id,),
+    )
+    matches = []
+    for goal_id, goal_text in goals:
+        normalized_goal = _normalize_goal_text(goal_text)
+        if clean_query == normalized_goal or clean_query in normalized_goal or normalized_goal in clean_query:
+            matches.append((goal_id, goal_text))
+
+    if not matches:
+        return False, "Не нашёл такую цель. Можно написать её точнее или указать номер из списка целей."
+
+    if len(matches) > 1:
+        variants = ", ".join(["#" + str(goal_id) for goal_id, _ in matches[:5]])
+        return False, "Нашёл несколько похожих целей: " + variants + ". Напиши, какую удалить по номеру."
+
+    goal_id, goal_text = matches[0]
+    await execute(
+        "DELETE FROM user_goals WHERE user_id = %s AND id = %s",
+        (user_id, goal_id),
+    )
+    return True, "Цель удалена: " + goal_text
+
+
 async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
     from app.database import execute
     from app.services.insights import build_transaction_insight
@@ -253,6 +304,13 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
                 actions_log += "\nЦель сохранена!"
             except Exception as e:
                 actions_log += "\nОшибка сохранения цели: " + str(e)
+        elif line.startswith("DELETE_GOAL:"):
+            goal_query = line.replace("DELETE_GOAL:", "").strip()
+            try:
+                _, message = await delete_goal_by_query(user_id, goal_query)
+                actions_log += "\n" + message
+            except Exception as e:
+                actions_log += "\nОшибка удаления цели: " + str(e)
         else:
             clean_lines.append(line)
 
