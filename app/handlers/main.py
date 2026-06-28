@@ -22,6 +22,7 @@ from app.keyboards import (
     premium_keyboard,
 )
 from app.services.transaction_service import create_transaction
+from app.services.insights import build_first_transaction_insight, build_transaction_insight
 
 router = Router()
 
@@ -30,6 +31,21 @@ class AddTransaction(StatesGroup):
     choosing_category = State()
     entering_amount   = State()
     entering_comment  = State()
+
+
+NO_SPEND_REPLIES = {
+    "ничего",
+    "ничего не тратил",
+    "ничего не тратила",
+    "пока ничего",
+    "сегодня ничего",
+    "нет",
+}
+
+
+def _is_no_spend_reply(text: str) -> bool:
+    normalized = " ".join((text or "").lower().strip().split())
+    return normalized in NO_SPEND_REPLIES
 
 
 @router.message(CommandStart())
@@ -42,15 +58,14 @@ async def cmd_start(message: Message, state: FSMContext):
         user.full_name or "",
         user.language_code or "ru",
     )
-    await message.answer("Кнопка меню включена.", reply_markup=MAIN_REPLY_KB)
     await message.answer(
-        f"Привет, {user.first_name}! 👋\n\n"
-        "Я помогу тебе вести личный бюджет: записывать расходы и доходы, "
-        "анализировать траты и давать советы.\n\n"
-        "📧 Обратная связь и помощь: findirvladislavku@gmail.com\n"
-        "📚 Обучение и команды: /help\n\n"
-        "Выбирай действие:",
-        reply_markup=main_menu(),
+        "Привет 👋\n\n"
+        "Я помогу запоминать расходы и потом отвечать на любые вопросы о твоих деньгах.\n\n"
+        "Не нужно вести таблицы.\n"
+        "Просто рассказывай мне, что купил — текстом или голосом.\n\n"
+        "Давай попробуем.\n"
+        "На что ты сегодня уже потратил деньги?",
+        reply_markup=MAIN_REPLY_KB,
     )
 
 
@@ -195,10 +210,16 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
     await state.clear()
     sign = "−" if data["tx_type"] == "expense" else "+"
     kind_label = {"fixed": "постоянный", "variable": "переменный", "income": "доход"}.get(data["kind"], "")
-    await message.answer(
+    text = (
         f"✅ Записано!\n\n"
         f"{sign}{data['amount']:,.0f} ₽  •  {kind_label}\n"
-        f"💬 {comment or '—'}",
+        f"💬 {comment or '—'}"
+    )
+    insight = await build_transaction_insight(message.from_user.id, tx["id"])
+    if insight:
+        text += "\n\n" + insight
+    await message.answer(
+        text,
         reply_markup=confirm_keyboard(tx["id"]),
     )
 
@@ -427,6 +448,10 @@ async def msg_quick_input(message: Message, state: FSMContext):
         text += f"💬 {tx['comment']}\n"
     if tx.get("pnl_period"):
         text += f"📊 ПнЛ: {tx['pnl_period']}\n"
+
+    insight = await build_transaction_insight(message.from_user.id, saved["id"])
+    if insight:
+        text += "\n" + insight + "\n"
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     await message.answer(
@@ -1350,6 +1375,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
 
     if name == "add_transaction":
         added = []
+        saved_ids = []
         for tx in params.get("transactions", []):
             saved = await create_transaction(
                 user_id=message.from_user.id,
@@ -1361,12 +1387,17 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                 transaction_date=tx.get("transaction_date"),
                 pnl_period=tx.get("pnl_period"),
             )
+            saved_ids.append(saved["id"])
             sign = "-" if tx["type"] == "expense" else "+"
             added.append(f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{saved['id']}")
 
         if added:
+            response_text = "Записано:\n" + "\n".join(added)
+            insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
+            if insight:
+                response_text += "\n\n" + insight
             await message.answer(
-                "Записано:\n" + "\n".join(added),
+                response_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
@@ -1458,6 +1489,16 @@ async def cb_ask_ai_pending(call: CallbackQuery, state: FSMContext):
 async def msg_free_text(message: Message, state: FSMContext):
     # ИИ-хелпер — триггер по ключевым фразам
     text_lower = message.text.lower().strip()
+    if _is_no_spend_reply(message.text):
+        await message.answer(
+            "Хорошо, тогда можно записать позже, когда появятся расходы.\n\n"
+            "Например: «500 на продукты» или «кофе 250».",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
     if any(trigger in text_lower for trigger in HELP_TRIGGERS):
         thinking = await message.answer("Сейчас расскажу...")
         try:

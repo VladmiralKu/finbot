@@ -270,16 +270,19 @@ async def cb_bank_import_cancel(call: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "bank_import_confirm")
 async def cb_bank_import_confirm(call: CallbackQuery, state: FSMContext):
+    from app.services.insights import build_first_transaction_insight
+
     data = await state.get_data()
     operations = data.get("bank_import_operations") or []
     created = 0
     duplicates = 0
+    created_ids = []
 
     for tx in operations:
         if await import_hash_exists(call.from_user.id, tx["import_hash"]):
             duplicates += 1
             continue
-        await create_transaction(
+        saved = await create_transaction(
             user_id=call.from_user.id,
             category_id=tx["category_id"],
             amount=tx["amount"],
@@ -289,11 +292,16 @@ async def cb_bank_import_confirm(call: CallbackQuery, state: FSMContext):
             transaction_date=tx["transaction_date"],
             import_hash=tx["import_hash"],
         )
+        created_ids.append(saved["id"])
         created += 1
 
     await state.clear()
+    text = f"Импорт завершён.\nСоздано: {created}\nДубли пропущены: {duplicates}"
+    insight = await build_first_transaction_insight(call.from_user.id, created_ids)
+    if insight:
+        text += "\n\n" + insight
     await call.message.edit_text(
-        f"Импорт завершён.\nСоздано: {created}\nДубли пропущены: {duplicates}",
+        text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),

@@ -212,10 +212,12 @@ async def log_ai_usage(user_id: int):
 
 async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
     from app.database import execute
+    from app.services.insights import build_transaction_insight
     from app.services.transaction_ai import extract_transactions_from_text
     from app.services.transaction_service import create_transaction
     actions_log = ""
     clean_lines = []
+    insight_added = False
 
     for line in ai_text.split("\n"):
         if line.startswith("TRANSACTION:"):
@@ -223,7 +225,7 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
             try:
                 transactions = await extract_transactions_from_text(user_id, tx_str, source="ai")
                 for tx in transactions:
-                    await create_transaction(
+                    saved = await create_transaction(
                         user_id=user_id,
                         category_id=tx["category_id"],
                         amount=tx["amount"],
@@ -234,6 +236,11 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
                         pnl_period=tx.get("pnl_period"),
                     )
                     actions_log += "\nТранзакция внесена!"
+                    if not insight_added:
+                        insight = await build_transaction_insight(user_id, saved["id"])
+                        if insight:
+                            actions_log += "\n" + insight
+                            insight_added = True
             except Exception as e:
                 actions_log += "\nОшибка внесения транзакции: " + str(e)
         elif line.startswith("GOAL:"):

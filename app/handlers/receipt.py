@@ -89,6 +89,7 @@ async def msg_photo_receipt(message: Message):
 
         # Парсим итоговую сумму из ответа GPT
         added = []
+        insight = None
 
         import re as _re
 
@@ -112,7 +113,7 @@ async def msg_photo_receipt(message: Message):
                 source="receipt",
             )
             if category:
-                await create_transaction(
+                saved = await create_transaction(
                     user_id=message.from_user.id,
                     category_id=category["category_id"],
                     amount=amount_found,
@@ -122,9 +123,13 @@ async def msg_photo_receipt(message: Message):
                     receipt_photo_id=photo.file_id,
                 )
                 added.append("-" + str(int(amount_found)) + " руб. — " + category["category_name"])
+                from app.services.insights import build_transaction_insight
+                insight = await build_transaction_insight(message.from_user.id, saved["id"])
 
         if added:
             text = "Чек распознан! Внесено:\n" + "\n".join(added)
+            if insight:
+                text += "\n\n" + insight
         else:
             text = "Не удалось распознать транзакции из чека.\nПопробуй сделать более чёткое фото."
 

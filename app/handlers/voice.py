@@ -81,6 +81,7 @@ async def msg_voice(message: Message, state: FSMContext):
     from app.database import get_user_tier
     from app.handlers.ai_assistant import AIState
     from app.handlers.business import NoteSearchState, NoteState
+    from app.services.insights import build_first_transaction_insight
     from app.services.transaction_ai import extract_transactions_from_text
     from app.services.transaction_service import create_transaction
 
@@ -122,6 +123,7 @@ async def msg_voice(message: Message, state: FSMContext):
 
         transactions = await extract_transactions_from_text(message.from_user.id, text, source="voice")
         added = []
+        saved_ids = []
 
         # Проверяем нужна ли конвертация валюты
         usd_rate = None
@@ -150,14 +152,19 @@ async def msg_voice(message: Message, state: FSMContext):
                 transaction_date=tx.get("transaction_date"),
                 pnl_period=tx.get("pnl_period"),
             )
+            saved_ids.append(saved["id"])
             sign = "-" if type_ == 'expense' else "+"
             added.append(sign + str(int(amount)) + " руб. — " + tx["category_name"] + hint_currency + f" #{saved['id']}")
 
         if added:
             if current_state:
                 await state.clear()
+            response_text = "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added)
+            insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
+            if insight:
+                response_text += "\n\n" + insight
             await message.answer(
-                "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added),
+                response_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ])

@@ -46,7 +46,7 @@ async def main():
     await get_pool()
     logger.info("Database pool initialized")
     await bot.set_my_commands([
-        BotCommand(command="start", description="меню"),
+        BotCommand(command="start", description="старт"),
         BotCommand(command="help", description="помощь"),
         BotCommand(command="category", description="категории"),
     ])
