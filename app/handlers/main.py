@@ -1576,10 +1576,9 @@ async def cmd_category(message: Message):
 
     if not args or args == "list":
         await message.answer(
-            "Категории можно посмотреть кнопкой ниже.",
+            await render_categories_text(message.from_user.id),
             parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📂 Показать категории", callback_data="categories_list")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
         )
