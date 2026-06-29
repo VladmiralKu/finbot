@@ -90,6 +90,19 @@ async def main():
     except Exception as e:
         logger.warning("Migration ai_history: " + str(e))
 
+    try:
+        from app.database import execute
+        await execute("""
+            CREATE TABLE IF NOT EXISTS trial_journey_messages (
+                user_id BIGINT NOT NULL,
+                day INT NOT NULL,
+                sent_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, day)
+            )
+        """)
+    except Exception as e:
+        logger.warning("Migration trial journey: " + str(e))
+
     scheduler = setup_scheduler(bot)
 
     from app.webhook_server import start_webhook_server
