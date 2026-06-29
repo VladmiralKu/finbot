@@ -22,6 +22,9 @@ def main_menu():
             InlineKeyboardButton(text="📊 Отчёты",        callback_data="reports_menu"),
         ],
         [
+            InlineKeyboardButton(text="📂 Категории", callback_data="categories_list"),
+        ],
+        [
             InlineKeyboardButton(text="📝 Заметки", callback_data="notes_menu"),
         ],
     ])

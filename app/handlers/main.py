@@ -48,6 +48,26 @@ def _is_no_spend_reply(text: str) -> bool:
     return normalized in NO_SPEND_REPLIES
 
 
+async def render_categories_text(user_id: int) -> str:
+    cats = await get_categories(user_id)
+    if not cats:
+        return "Категорий пока нет."
+
+    income = [c for c in cats if c.get("type") == "income"]
+    expense = [c for c in cats if c.get("type") == "expense"]
+
+    text = "📂 Твои категории\n\n"
+    text += "💰 Доходы:\n"
+    text += "\n".join(["• " + c["name"] for c in income]) if income else "• пока нет"
+    text += "\n\n💸 Расходы:\n"
+    text += "\n".join(["• " + c["name"] for c in expense]) if expense else "• пока нет"
+    text += (
+        "\n\nЧтобы изменить статьи, открой «Ручной ввод» → «Расход» или «Доход» "
+        "и напиши: «Заменить Кафе на Рестораны», «Добавить Подарки» или «Удалить Старую статью»."
+    )
+    return text
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -60,9 +80,11 @@ async def cmd_start(message: Message, state: FSMContext):
     )
     await message.answer(
         "Привет 👋\n\n"
-        "Я помогу запоминать расходы и потом отвечать на любые вопросы о твоих деньгах.\n\n"
+        "У тебя есть 10 дней пробного Премиума.\n\n"
+        "За первые 3 дня я помогу понять, куда уходят деньги: просто записывай траты и доходы текстом или голосом.\n"
+        "За неделю мы уже сможем собрать плановый бюджет и найти первые места, где деньги утекают незаметно.\n\n"
         "Не нужно вести таблицы.\n"
-        "Просто рассказывай мне, что купил — текстом или голосом.\n\n"
+        "Просто рассказывай мне, что купил или получил — текстом или голосом.\n\n"
         "Давай попробуем.\n"
         "На что ты сегодня уже потратил деньги?",
         reply_markup=MAIN_REPLY_KB,
@@ -82,6 +104,17 @@ async def cb_main_menu(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text("Выбирай действие:", reply_markup=main_menu())
     except Exception:
         await call.message.answer("Выбирай действие:", reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "categories_list")
+async def cb_categories_list(call: CallbackQuery):
+    await call.message.edit_text(
+        await render_categories_text(call.from_user.id),
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
 
 
 @router.callback_query(F.data == "manual_input")
@@ -1542,21 +1575,14 @@ async def cmd_category(message: Message):
     args = message.text.strip()[len("/category"):].strip()
 
     if not args or args == "list":
-        cats = await get_categories(message.from_user.id)
-        if not cats:
-            await message.answer("Категорий нет.")
-            return
-        income = [c for c in cats if c.get('type') == 'income']
-        expense = [c for c in cats if c.get('type') == 'expense']
-        text = "📂 Твои категории:\n\n"
-        text += "💰 Доходы:\n"
-        for c in income:
-            text += f"  • {c['name']}\n"
-        text += "\n💸 Расходы:\n"
-        for c in expense:
-            text += f"  • {c['name']}\n"
-        text += "\nКоманды:\n/category rename \"Старое\" \"Новое\"\n/category add \"Название\" expense\n/category add \"Название\" income\n/category delete \"Название\""
-        await message.answer(text, parse_mode=None)
+        await message.answer(
+            "Категории можно посмотреть кнопкой ниже.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Показать категории", callback_data="categories_list")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
         return
 
     # rename

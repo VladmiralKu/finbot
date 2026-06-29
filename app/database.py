@@ -45,7 +45,7 @@ async def get_or_create_user(user_id, username, full_name, lang="ru"):
     user = await fetchone("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
         from datetime import datetime, timedelta
-        trial_until = datetime.now() + timedelta(days=3)
+        trial_until = datetime.now() + timedelta(days=10)
         await execute(
             """INSERT INTO users (id, username, full_name, language_code, subscription_tier, premium_until)
                VALUES (%s,%s,%s,%s,'premium',%s)""",
