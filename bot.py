@@ -48,7 +48,6 @@ async def main():
     await bot.set_my_commands([
         BotCommand(command="start", description="старт"),
         BotCommand(command="help", description="помощь"),
-        BotCommand(command="category", description="категории"),
     ])
 
     # Лёгкие безопасные миграции

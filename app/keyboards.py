@@ -18,7 +18,7 @@ def main_menu():
             InlineKeyboardButton(text="⭐ Тарифы",    callback_data="premium"),
         ],
         [
-            InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant"),
+            InlineKeyboardButton(text="🤖 ИИ-помощник", callback_data="ai_assistant"),
             InlineKeyboardButton(text="📊 Отчёты",        callback_data="reports_menu"),
         ],
         [

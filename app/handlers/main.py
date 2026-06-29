@@ -299,7 +299,7 @@ async def render_month_report(user_id: int, year: int, month: int):
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📈 График", callback_data="chart:" + str(year) + ":" + str(month))],
-        [InlineKeyboardButton(text="🤖 ИИ-ассистент", callback_data="ai_assistant")],
+        [InlineKeyboardButton(text="🤖 ИИ-помощник", callback_data="ai_assistant")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     return text, kb
@@ -345,7 +345,7 @@ async def cb_ai_analyze(call: CallbackQuery):
     if not prem:
         await call.answer("Доступно только в Premium ⭐", show_alert=True)
         return
-    await call.answer("ИИ-анализ — скоро!", show_alert=True)
+    await call.answer("ИИ-помощник уже доступен в меню.", show_alert=True)
 
 
 @router.callback_query(F.data == "scan_receipt")
@@ -1135,7 +1135,8 @@ BOT_KNOWLEDGE = """
 📥 РАСХОДЫ И ДОХОДЫ
 - Кнопка "Ручной ввод" → выбери расход или доход → выбери категорию → введи сумму → опционально комментарий
 - Быстрый ввод текстом: просто напиши сумму, например "500" или "-500 кофе"
-- Голосом: надиктуй трату, например "потратил 300 рублей на продукты" (недоступно на тарифе Скан и текст)
+- Голосом можно вносить операции из любого места бота: "кофе 250, такси 700", "получил зарплату 50000"
+- Важно: в комментарии к голосовой операции лучше не говорить числа, количество и номера. Вместо "купил 2 кофе по 250" скажи "кофе 500", иначе бот может принять числа за отдельные операции
 
 📋 ПОСЛЕДНИЕ ТРАНЗАКЦИИ
 - Кнопка "Последние" → список последних операций
@@ -1145,9 +1146,10 @@ BOT_KNOWLEDGE = """
 - Кнопка "Отчёты" → календарь, отчёт ДДС, графики по месяцам
 - Выгрузка всей базы в Excel (на тарифе Премиум)
 
-🤖 ИИ-АССИСТЕНТ
-- Кнопка "ИИ-ассистент" → финансовый советник на базе GPT-4o
-- Помнит историю диалога, можно задавать вопросы о финансах
+🤖 ИИ-ПОМОЩНИК
+- Кнопка "ИИ-помощник" → финансовый советник на базе GPT-4o
+- Можно обсудить бюджет, финансовый план, сложную ситуацию, долги, траты и доходы
+- Можно установить или удалить финансовую цель
 - На тарифе Премиум можно общаться вообще на любые темы, не только финансовые
 - Голосовые сообщения работают внутри ассистента (кроме тарифа Скан и текст)
 
@@ -1162,11 +1164,10 @@ BOT_KNOWLEDGE = """
 - В день платежа бот напомнит и спросит оплачено ли
 
 📂 УПРАВЛЕНИЕ КАТЕГОРИЯМИ
-- /category — посмотреть список своих категорий
-- /category add "Название" expense — добавить категорию расходов
-- /category add "Название" income — добавить категорию доходов
-- /category rename "Старое" "Новое" — переименовать категорию
-- /category delete "Название" — удалить категорию
+- Чтобы заменить расходную статью: открой "Ручной ввод" → "Расход" и напиши "Заменить старую статью на новую"
+- Чтобы заменить доходную статью: открой "Ручной ввод" → "Доход" и напиши "Заменить старую статью на новую"
+- Там же можно написать "Добавить название статьи" или "Удалить название статьи"
+- Эти команды можно сказать голосом, находясь внутри расходов или доходов
 
 ⭐ ТАРИФЫ
 - Бесплатно: только просмотр последних и отчётов
@@ -1177,7 +1178,6 @@ BOT_KNOWLEDGE = """
 📌 КОМАНДЫ
 - /start — главное меню
 - /help — эта справка
-- /category — управление категориями
 - /reset — удалить все транзакции
 - /deleteaccount — удалить аккаунт полностью
 
@@ -1205,16 +1205,23 @@ async def cmd_help(message: Message):
         "✍️ Ручной ввод — записать трату или поступление (кнопкой, текстом или голосом)\n"
         "📋 Последние — история операций, можно редактировать и удалять\n"
         "📊 Отчёты — календарь, отчёт ДДС, графики, выгрузка в Excel (Премиум)\n"
-        "🤖 ИИ-ассистент — финансовый советник на GPT-4o, на Премиум — свободные беседы на любые темы\n"
+        "🤖 ИИ-помощник — бюджет, план, финансовые вопросы, цели; на Премиум — свободные беседы на любые темы\n"
         "🧾 Чеки — отправь фото чека, сумма распознается автоматически\n"
         "📝 Заметки — текстовые заметки, не привязанные к транзакциям\n"
         "🔁 Постоянные расходы — регулярные платежи с напоминаниями\n\n"
+        "🎙 Голосовой ввод\n"
+        "Операции можно вносить голосом из любого места бота.\n"
+        "Примеры: \"кофе 250, такси 700\", \"получил зарплату 50000\", \"продукты 3200 и аренда 30000\".\n"
+        "Важно: в комментарии не указывай числа, количество и номера. Лучше сказать \"кофе 500\", а не \"2 кофе по 250\", чтобы бот не принял числа за отдельные операции.\n\n"
         "📂 Категории\n"
-        "/category — список своих категорий\n"
-        "/category add \"Название\" expense — добавить категорию расходов\n"
-        "/category add \"Название\" income — добавить категорию доходов\n"
-        "/category rename \"Старое\" \"Новое\" — переименовать\n"
-        "/category delete \"Название\" — удалить\n\n"
+        "Чтобы изменить расходную статью: открой \"Ручной ввод\" → \"Расход\".\n"
+        "Чтобы изменить доходную статью: открой \"Ручной ввод\" → \"Доход\".\n"
+        "Внутри нужного раздела можно написать или сказать голосом:\n"
+        "— \"Заменить Кафе на Рестораны\"\n"
+        "— \"Добавить Подарки\"\n"
+        "— \"Удалить Старую статью\"\n\n"
+        "🤖 ИИ-помощник\n"
+        "В ИИ-помощнике можно обсудить бюджет, финансовый план, проблемы с расходами, идеи экономии, а также установить или удалить финансовую цель.\n\n"
         "⭐ Тарифы\n"
         "Скан и текст — 149 руб/мес, текст + чеки, 60 ИИ-сообщений\n"
         "База — 290 руб/мес, + голос, 150 ИИ-сообщений\n"
@@ -1420,7 +1427,7 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
     tier = await get_user_tier(user_id)
     if tier == "free":
         await message.answer(
-            "ИИ-ассистент доступен с тарифа Старт.",
+            "ИИ-помощник доступен с тарифа Старт.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -1431,7 +1438,7 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
     can, used, limit = await check_ai_limit(user_id)
     if not can:
         await message.answer(
-            "Лимит ИИ-ассистента исчерпан на этот месяц.",
+            "Лимит ИИ-помощника исчерпан на этот месяц.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -1440,7 +1447,7 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
         return
 
     await state.set_state(AIState.chatting)
-    thinking = await message.answer("Передаю в ИИ-ассистент...")
+    thinking = await message.answer("Передаю в ИИ-помощник...")
     try:
         ai_text, new_history = await get_ai_response(user_id, user_text, [], tier=tier)
         await state.update_data(history=new_history[-20:])
@@ -1461,7 +1468,7 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
         except Exception:
             pass
         await message.answer(
-            "Не смог передать в ИИ-ассистент: " + str(e),
+            "Не смог передать в ИИ-помощник: " + str(e),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
@@ -1477,7 +1484,7 @@ async def cb_ask_ai_pending(call: CallbackQuery, state: FSMContext):
         await call.message.answer(
             "Не нашёл текст для ИИ. Напиши вопрос ещё раз.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="ИИ-ассистент", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="ИИ-помощник", callback_data="ai_assistant")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
         )
@@ -1519,10 +1526,10 @@ async def msg_free_text(message: Message, state: FSMContext):
     if not handled:
         await state.update_data(ai_pending_text=message.text)
         await message.answer(
-            "Не понял это как транзакцию или команду. Могу передать фразу в ИИ-ассистент.",
+            "Не понял это как транзакцию или команду. Могу передать фразу в ИИ-помощник.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Спросить ИИ", callback_data="ask_ai_pending")],
-                [InlineKeyboardButton(text="Открыть ИИ-ассистент", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Открыть ИИ-помощник", callback_data="ai_assistant")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
         )

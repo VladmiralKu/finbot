@@ -325,7 +325,7 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
     tier = await get_user_tier(call.from_user.id)
     if tier == 'free':
         await call.message.edit_text(
-            "ИИ-ассистент доступен с тарифа Старт (149 руб/мес).",
+            "ИИ-помощник доступен с тарифа Старт (149 руб/мес).",
             parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
@@ -337,7 +337,7 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
     can, used, limit = await check_ai_limit(call.from_user.id)
     if not can:
         await call.message.edit_text(
-            "Лимит ИИ-ассистента исчерпан на этот месяц.\nИспользовано: " + str(used) + "/" + str(limit),
+            "Лимит ИИ-помощника исчерпан на этот месяц.\nИспользовано: " + str(used) + "/" + str(limit),
             parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
@@ -359,6 +359,7 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
             "- Проанализировать расходы\n"
             "- Составить план выхода из минуса\n"
             "- Сохранить финансовую цель\n"
+            "- Удалить неактуальную финансовую цель\n"
             "- Ответить на вопросы по финансам\n"
             "- Поговорить на любую другую тему (только текстом)\n\n"
             "Сообщений: " + limit_str
@@ -371,6 +372,7 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
             "- Проанализировать расходы\n"
             "- Составить план выхода из минуса\n"
             "- Сохранить финансовую цель\n"
+            "- Удалить неактуальную финансовую цель\n"
             "- Ответить на вопросы по финансам\n\n"
             "Сообщений: " + limit_str
         )
@@ -402,7 +404,7 @@ async def cb_ai_end(call: CallbackQuery, state: FSMContext):
 
 @router.message(AIState.chatting, F.voice)
 async def msg_ai_voice(message: Message, state: FSMContext):
-    """Голосовое сообщение в ИИ-ассистенте."""
+    """Голосовое сообщение в ИИ-помощнике."""
     import httpx, os
     from app.handlers.voice import transcribe_voice
     from app.database import get_user_tier
@@ -459,7 +461,7 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     if not can:
         await state.clear()
         await message.answer(
-            "Лимит ИИ-ассистента исчерпан.",
+            "Лимит ИИ-помощника исчерпан.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
