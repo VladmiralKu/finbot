@@ -72,6 +72,18 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "needs_confirmation": False,
         }
 
+    if (
+        "транзакц" in lower
+        and "категор" in lower
+        and ("помен" in lower or "измени" in lower or "смен" in lower or "перенеси" in lower)
+    ):
+        return {
+            "intent": "change_transaction_category",
+            "confidence": 0.86,
+            "params": {"text": text},
+            "needs_confirmation": True,
+        }
+
     category_like = (
         "категор" in lower
         or "переимен" in lower
@@ -99,7 +111,7 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
         return {
             "intent": "delete_transaction",
             "confidence": 0.92,
-            "params": {"tx_id": tx_id, "last": "последн" in lower},
+            "params": {"tx_id": tx_id, "last": "последн" in lower, "text": text},
             "needs_confirmation": True,
         }
 

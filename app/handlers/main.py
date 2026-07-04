@@ -411,12 +411,42 @@ async def cb_confirm_delete_intent(call: CallbackQuery):
 
 
 @router.callback_query(F.data == "cancel_delete_intent")
-async def cb_cancel_delete_intent(call: CallbackQuery):
+async def cb_cancel_delete_intent(call: CallbackQuery, state: FSMContext):
+    await state.set_state(DeleteTxState.waiting_id)
     await call.message.edit_text(
-        "Удаление отменено.",
+        "Хорошо. Введите номер транзакции для удаления, например: 42.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),
+    )
+
+
+@router.callback_query(F.data.startswith("confirm_change_tx_category:"))
+async def cb_confirm_change_tx_category(call: CallbackQuery):
+    _, tx_id, category_id = call.data.split(":")
+    row = await fetchone(
+        "SELECT name, type, kind FROM categories WHERE id=%s AND user_id=%s",
+        (int(category_id), call.from_user.id),
+    )
+    if not row:
+        await call.message.edit_text("Категория не найдена.", reply_markup=main_menu())
+        return
+    category_name, type_, kind = row
+    await execute(
+        "UPDATE transactions SET category_id=%s, type=%s, kind=%s WHERE id=%s AND user_id=%s",
+        (int(category_id), type_, kind, int(tx_id), call.from_user.id),
+    )
+    await call.message.edit_text(
+        f"Готово. Транзакция #{tx_id} перенесена в категорию «{category_name}».",
+        reply_markup=main_menu(),
+    )
+
+
+@router.callback_query(F.data == "cancel_change_tx_category")
+async def cb_cancel_change_tx_category(call: CallbackQuery):
+    await call.message.edit_text(
+        "Смена категории отменена. Можно написать номер транзакции и новую категорию точнее.",
+        reply_markup=main_menu(),
     )
 
 
@@ -870,7 +900,7 @@ class DeleteTxState(StatesGroup):
 @router.callback_query(F.data == "delete_by_id")
 async def cb_delete_by_id(call: CallbackQuery, state: FSMContext):
     await state.set_state(DeleteTxState.waiting_id)
-    await call.message.edit_text(
+    await call.message.answer(
         "Напишите номер транзакции для удаления (например: 42):",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1375,13 +1405,28 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
 
     if name == "delete_transaction":
         tx = None
+        variants = []
         tx_id = params.get("tx_id")
         if tx_id:
             tx = await get_transaction_by_id(message.from_user.id, tx_id)
         elif params.get("last"):
             tx = await get_last_transaction(message.from_user.id)
+        else:
+            from app.services.transaction_commands import find_transaction_from_text
+            tx, variants = await find_transaction_from_text(message.from_user.id, params.get("text") or text)
 
         if not tx:
+            if variants:
+                await message.answer(
+                    "Нашёл несколько похожих транзакций:\n"
+                    + "\n".join(_format_tx_preview(item) for item in variants)
+                    + "\n\nНапиши номер нужной транзакции.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Удалить по номеру", callback_data="delete_by_id")],
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ]),
+                )
+                return True
             await message.answer(
                 "Не нашёл транзакцию для удаления. Напиши номер, например: «удали транзакцию 42».",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -1395,7 +1440,62 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="Да, удалить", callback_data=f"confirm_delete_intent:{tx[0]}"),
-                    InlineKeyboardButton(text="Отмена", callback_data="cancel_delete_intent"),
+                    InlineKeyboardButton(text="Нет, введу номер", callback_data="cancel_delete_intent"),
+                ],
+            ]),
+        )
+        return True
+
+    if name == "change_transaction_category":
+        from app.services.transaction_commands import (
+            find_transaction_for_category_change,
+            parse_category_change,
+        )
+        parsed = await parse_category_change(message.from_user.id, params.get("text") or text)
+        category_id = parsed.get("new_category_id")
+        category_name = parsed.get("new_category_name")
+        if not category_id:
+            await message.answer(
+                "Не понял новую категорию. Напиши, например: «поменяй категорию транзакции #42 на Транспорт».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+        tx, variants = await find_transaction_for_category_change(
+            message.from_user.id,
+            params.get("text") or text,
+            parsed,
+        )
+        if not tx:
+            if variants:
+                await message.answer(
+                    "Нашёл несколько похожих транзакций:\n"
+                    + "\n".join(_format_tx_preview(item) for item in variants)
+                    + "\n\nНапиши номер транзакции и новую категорию точнее.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ]),
+                )
+                return True
+            await message.answer(
+                "Не нашёл транзакцию для смены категории. Укажи номер или сумму/месяц точнее.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+        await message.answer(
+            "Вы имеете в виду эту транзакцию?\n"
+            + _format_tx_preview(tx)
+            + f"\n\nПоменять категорию на «{category_name}»?",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Да, поменять",
+                        callback_data=f"confirm_change_tx_category:{tx[0]}:{category_id}",
+                    ),
+                    InlineKeyboardButton(text="Нет", callback_data="cancel_change_tx_category"),
                 ],
             ]),
         )

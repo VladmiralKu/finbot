@@ -17,6 +17,18 @@ class NoteState(StatesGroup):
     waiting_text = State()
 
 
+class NoteDeleteState(StatesGroup):
+    waiting_id = State()
+
+
+async def _save_note(user_id: int, text: str):
+    from app.database import execute
+    await execute(
+        "INSERT INTO notes (user_id, text) VALUES (%s, %s)",
+        (user_id, text),
+    )
+
+
 def business_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Табло управленца", callback_data="dash_menu")],
@@ -100,7 +112,7 @@ async def cb_notes_menu(call: CallbackQuery):
 async def cb_note_add(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteState.waiting_text)
     await call.message.edit_text(
-        "Напиши свою мысль:",
+        "Напиши или надиктуй свою мысль:",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
@@ -108,18 +120,43 @@ async def cb_note_add(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(NoteState.waiting_text)
+@router.message(NoteState.waiting_text, F.voice)
+async def msg_note_voice(message: Message, state: FSMContext):
+    from app.handlers.voice import transcribe_voice
+
+    thinking = await message.answer("Распознаю заметку...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        text = await transcribe_voice(file_bytes.read())
+        await thinking.delete()
+    except Exception as e:
+        await thinking.delete()
+        await message.answer("Не удалось распознать голос: " + str(e))
+        return
+
+    await state.clear()
+    if not text:
+        await message.answer("Текст не получен, попробуй ещё раз.")
+        return
+    await _save_note(message.from_user.id, text)
+    await message.answer(
+        "Заметка сохранена!\n\n" + text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+    )
+
+
+@router.message(NoteState.waiting_text, F.text)
 async def msg_note_text(message: Message, state: FSMContext):
-    from app.database import execute
     await state.clear()
     text = message.text or ""
     if not text:
         await message.answer("Текст не получен, попробуй ещё раз.")
         return
-    await execute(
-        "INSERT INTO notes (user_id, text) VALUES (%s, %s)",
-        (message.from_user.id, text)
-    )
+    await _save_note(message.from_user.id, text)
     await message.answer(
         "Заметка сохранена!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -168,6 +205,7 @@ async def cb_notes_list(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         buttons if buttons else [],
         [InlineKeyboardButton(text="Найти по номеру", callback_data="note_search")],
+        [InlineKeyboardButton(text="Удалить по номеру", callback_data="note_delete")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     await call.message.edit_text(text, parse_mode=None, reply_markup=kb)
@@ -219,10 +257,81 @@ async def msg_note_search(message: Message, state: FSMContext):
         "#" + str(note_id) + " [" + date_str + "]\n\n" + text,
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Удалить заметку", callback_data=f"note_delete_confirm:{note_id}")],
             [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
     )
+
+
+@router.callback_query(F.data == "note_delete")
+async def cb_note_delete(call: CallbackQuery, state: FSMContext):
+    await state.set_state(NoteDeleteState.waiting_id)
+    await call.message.edit_text(
+        "Введи номер заметки для удаления, например: 42.",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
+        ])
+    )
+
+
+@router.message(NoteDeleteState.waiting_id, F.text)
+async def msg_note_delete(message: Message, state: FSMContext):
+    await state.clear()
+    try:
+        note_id = int((message.text or "").strip().replace("#", ""))
+    except ValueError:
+        await message.answer("Введи числовой номер заметки.")
+        return
+    await _delete_note(message.from_user.id, note_id, message)
+
+
+@router.message(NoteDeleteState.waiting_id, F.voice)
+async def msg_note_delete_voice(message: Message, state: FSMContext):
+    from app.handlers.voice import transcribe_voice
+    import re
+
+    thinking = await message.answer("Распознаю номер заметки...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        text = await transcribe_voice(file_bytes.read())
+        await thinking.delete()
+    except Exception as e:
+        await thinking.delete()
+        await message.answer("Не удалось распознать голос: " + str(e))
+        return
+
+    await state.clear()
+    match = re.search(r"\d+", text or "")
+    if not match:
+        await message.answer("Не услышал номер заметки. Введи номер текстом.")
+        return
+    await _delete_note(message.from_user.id, int(match.group(0)), message)
+
+
+@router.callback_query(F.data.startswith("note_delete_confirm:"))
+async def cb_note_delete_confirm(call: CallbackQuery):
+    note_id = int(call.data.split(":")[1])
+    await _delete_note(call.from_user.id, note_id, call.message, edit=True)
+
+
+async def _delete_note(user_id: int, note_id: int, target, edit: bool = False):
+    from app.database import execute
+    row_count = await execute(
+        "DELETE FROM notes WHERE id=%s AND user_id=%s",
+        (note_id, user_id),
+    )
+    text = f"Заметка #{note_id} удалена." if row_count else f"Заметка #{note_id} не найдена."
+    reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
+        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+    ])
+    if edit:
+        await target.edit_text(text, parse_mode=None, reply_markup=reply_markup)
+    else:
+        await target.answer(text, parse_mode=None, reply_markup=reply_markup)
 
 
 @router.callback_query(F.data.startswith("dash:"))
