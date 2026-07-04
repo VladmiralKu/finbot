@@ -122,6 +122,23 @@ async def msg_voice(message: Message, state: FSMContext):
         await thinking.delete()
         await message.answer("Распознано: " + text)
 
+        text_lower = text.lower().strip()
+        command_like = (
+            "удали" in text_lower
+            or "удалить" in text_lower
+            or (
+                "транзакц" in text_lower
+                and "категор" in text_lower
+                and ("помен" in text_lower or "измени" in text_lower or "смен" in text_lower or "перенеси" in text_lower)
+            )
+        )
+        if command_like:
+            from app.handlers.main import handle_intent_message, send_text_to_ai_assistant
+            handled = await handle_intent_message(message, state, text, source="voice")
+            if not handled:
+                await send_text_to_ai_assistant(message, state, message.from_user.id, text)
+            return
+
         transactions = await extract_transactions_from_text(message.from_user.id, text, source="voice")
         added = []
         saved_ids = []

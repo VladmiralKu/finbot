@@ -909,16 +909,18 @@ async def cb_delete_by_id(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(DeleteTxState.waiting_id)
+@router.message(DeleteTxState.waiting_id, F.text)
 async def msg_delete_tx_by_id(message: Message, state: FSMContext):
     from app.database import delete_transaction_by_id
-    await state.clear()
     try:
         tx_id = int(message.text.strip().replace("#", ""))
     except ValueError:
-        await message.answer("Введи числовой номер транзакции, например: 42")
+        handled = await handle_intent_message(message, state, message.text, source="text")
+        if not handled:
+            await message.answer("Введи числовой номер транзакции, например: 42")
         return
 
+    await state.clear()
     success = await delete_transaction_by_id(message.from_user.id, tx_id)
     if success:
         await message.answer(
@@ -933,6 +935,45 @@ async def msg_delete_tx_by_id(message: Message, state: FSMContext):
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ])
         )
+
+
+@router.message(DeleteTxState.waiting_id, F.voice)
+async def msg_delete_tx_by_voice(message: Message, state: FSMContext):
+    from app.handlers.voice import transcribe_voice
+
+    thinking = await message.answer("Распознаю голос...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        text = await transcribe_voice(file_bytes.read())
+        await thinking.delete()
+    except Exception as e:
+        await thinking.delete()
+        await message.answer("Не удалось распознать голос: " + str(e))
+        return
+
+    if not text:
+        await message.answer("Не удалось распознать голос. Попробуй ещё раз.")
+        return
+
+    await message.answer("Распознано: " + text)
+    if text.strip().replace("#", "").isdigit():
+        await state.clear()
+        from app.database import delete_transaction_by_id
+        tx_id = int(text.strip().replace("#", ""))
+        success = await delete_transaction_by_id(message.from_user.id, tx_id)
+        await message.answer(
+            f"Транзакция #{tx_id} удалена." if success else f"Транзакция #{tx_id} не найдена или не принадлежит тебе.",
+            reply_markup=main_menu() if success else InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Попробовать снова", callback_data="delete_by_id")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    handled = await handle_intent_message(message, state, text, source="voice")
+    if not handled:
+        await message.answer("Не понял, какую транзакцию удалить. Можно сказать номер или фразу вроде «удали 45 рублей за проезд».")
 
 
 # --- Экспорт в Excel ---

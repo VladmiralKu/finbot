@@ -267,7 +267,7 @@ async def msg_note_search(message: Message, state: FSMContext):
 @router.callback_query(F.data == "note_delete")
 async def cb_note_delete(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteDeleteState.waiting_id)
-    await call.message.edit_text(
+    await call.message.answer(
         "Введи номер заметки для удаления, например: 42.",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
