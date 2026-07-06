@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -318,32 +319,32 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
     return clean_text, actions_log
 
 
-@router.callback_query(F.data == "ai_assistant")
-async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
-    await call.answer()
+async def open_ai_assistant(target, state: FSMContext, user_id: int, edit: bool = False):
     from app.database import get_user_tier
-    tier = await get_user_tier(call.from_user.id)
+    tier = await get_user_tier(user_id)
     if tier == 'free':
-        await call.message.edit_text(
-            "ИИ-помощник доступен с тарифа Старт (149 руб/мес).",
-            parse_mode=None,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
-                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-            ])
-        )
+        text = "ИИ-помощник доступен с тарифа Старт (149 руб/мес)."
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+        if edit:
+            await target.edit_text(text, parse_mode=None, reply_markup=kb)
+        else:
+            await target.answer(text, parse_mode=None, reply_markup=kb)
         return
 
-    can, used, limit = await check_ai_limit(call.from_user.id)
+    can, used, limit = await check_ai_limit(user_id)
     if not can:
-        await call.message.edit_text(
-            "Лимит ИИ-помощника исчерпан на этот месяц.\nИспользовано: " + str(used) + "/" + str(limit),
-            parse_mode=None,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
-                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-            ])
-        )
+        text = "Лимит ИИ-помощника исчерпан на этот месяц.\nИспользовано: " + str(used) + "/" + str(limit)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
+        if edit:
+            await target.edit_text(text, parse_mode=None, reply_markup=kb)
+        else:
+            await target.answer(text, parse_mode=None, reply_markup=kb)
         return
 
     await state.set_state(AIState.chatting)
@@ -377,13 +378,24 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
             "Сообщений: " + limit_str
         )
 
-    await call.message.edit_text(
-        greeting,
-        parse_mode=None,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
-        ])
-    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
+    ])
+    if edit:
+        await target.edit_text(greeting, parse_mode=None, reply_markup=kb)
+    else:
+        await target.answer(greeting, parse_mode=None, reply_markup=kb)
+
+
+@router.callback_query(F.data == "ai_assistant")
+async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await open_ai_assistant(call.message, state, call.from_user.id, edit=True)
+
+
+@router.message(Command("ai"))
+async def cmd_ai_assistant(message: Message, state: FSMContext):
+    await open_ai_assistant(message, state, message.from_user.id, edit=False)
 
 
 @router.callback_query(F.data == "ai_end")
@@ -429,6 +441,10 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             await thinking.edit_text("Не удалось распознать голос.")
             return
         await thinking.delete()
+        from app.handlers.main import handle_intent_message
+        handled = await handle_intent_message(message, state, text, source="ai_voice")
+        if handled:
+            return
         data = await state.get_data()
         history = data.get('history', [])
         from app.database import save_ai_message
@@ -476,6 +492,11 @@ async def msg_ai_chat(message: Message, state: FSMContext):
 
     try:
         user_text = message.text or message.caption or ""
+        from app.handlers.main import handle_intent_message
+        handled = await handle_intent_message(message, state, user_text, source="ai_chat")
+        if handled:
+            await thinking_msg.delete()
+            return
         from app.database import get_user_tier
         current_tier = await get_user_tier(message.from_user.id)
         ai_text, new_history = await get_ai_response(

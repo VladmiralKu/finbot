@@ -49,6 +49,7 @@ async def main():
         BotCommand(command="start", description="старт"),
         BotCommand(command="help", description="помощь"),
         BotCommand(command="category", description="категории"),
+        BotCommand(command="ai", description="ИИ-помощник"),
     ])
 
     # Лёгкие безопасные миграции
