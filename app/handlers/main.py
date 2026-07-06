@@ -603,6 +603,137 @@ async def cb_noop(call: CallbackQuery):
     await call.answer()
 
 
+def _tx_row_to_current(tx) -> dict:
+    if isinstance(tx, dict):
+        return {
+            "id": tx.get("id"),
+            "amount": float(tx.get("amount") or 0),
+            "type": tx.get("type") or "expense",
+            "comment": tx.get("comment") or "",
+            "transaction_date": tx.get("transaction_date"),
+            "category_id": tx.get("category_id"),
+            "category_name": tx.get("cat_name") or tx.get("category_name") or "",
+        }
+    return {
+        "id": tx[0],
+        "amount": float(tx[1] or 0),
+        "type": tx[2] or "expense",
+        "comment": tx[3] or "",
+        "transaction_date": tx[4],
+        "category_id": tx[5] if len(tx) > 5 else None,
+        "category_name": tx[6] if len(tx) > 6 else "",
+    }
+
+
+def _format_current_tx(current: dict) -> str:
+    sign = "-" if current["type"] == "expense" else "+"
+    date_value = current["transaction_date"].strftime("%d.%m")
+    comment = f" | {current['comment']}" if current.get("comment") else ""
+    return f"{date_value} {sign}{abs(float(current['amount'])):,.0f} {current.get('category_name') or ''}{comment}"
+
+
+async def _build_transaction_edit(user_id: int, text: str, tx_id: int):
+    from app.database import get_categories
+    from app.services.transaction_commands import parse_transaction_edit
+
+    tx = await fetchone(
+        "SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, t.category_id, c.name as cat_name "
+        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
+        "WHERE t.id = %s AND t.user_id = %s",
+        (tx_id, user_id),
+    )
+    if not tx:
+        return None, None
+
+    current = _tx_row_to_current(tx)
+    parsed = await parse_transaction_edit(user_id, text, current)
+
+    amount = parsed.get("amount")
+    category_id = parsed.get("new_category_id")
+    comment = parsed.get("comment")
+    date_value = current["transaction_date"]
+    if parsed.get("day") and parsed.get("month"):
+        try:
+            date_value = datetime(
+                int(parsed.get("year") or datetime.now().year),
+                int(parsed["month"]),
+                int(parsed["day"]),
+            ).date()
+        except ValueError:
+            date_value = current["transaction_date"]
+
+    if amount is None:
+        amount = current["amount"]
+    if comment is None:
+        comment = current["comment"]
+    if not category_id:
+        category_id = current["category_id"]
+
+    type_ = current["type"]
+    category_name = current["category_name"]
+    cats = await get_categories(user_id)
+    for cat in cats:
+        if cat["id"] == category_id:
+            type_ = cat.get("type", type_)
+            category_name = cat.get("name", category_name)
+            break
+
+    updated = {
+        "tx_id": tx_id,
+        "amount": float(amount),
+        "type": type_,
+        "category_id": category_id,
+        "category_name": category_name,
+        "comment": comment,
+        "transaction_date": date_value,
+    }
+    if (
+        updated["amount"] == current["amount"]
+        and updated["type"] == current["type"]
+        and updated["category_id"] == current["category_id"]
+        and updated["comment"] == current["comment"]
+        and updated["transaction_date"] == current["transaction_date"]
+    ):
+        return current, None
+    return current, updated
+
+
+async def _apply_transaction_edit(user_id: int, edit: dict):
+    if not edit:
+        return False
+    await execute(
+        "UPDATE transactions SET amount=%s, type=%s, category_id=%s, comment=%s, transaction_date=%s WHERE id=%s AND user_id=%s",
+        (
+            edit["amount"],
+            edit["type"],
+            edit["category_id"],
+            edit["comment"],
+            edit["transaction_date"],
+            edit["tx_id"],
+            user_id,
+        ),
+    )
+    return True
+
+
+@router.callback_query(F.data == "confirm_edit_transaction")
+async def cb_confirm_edit_transaction(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    edit = data.get("pending_transaction_edit")
+    success = await _apply_transaction_edit(call.from_user.id, edit)
+    await state.update_data(pending_transaction_edit=None)
+    await call.message.edit_text(
+        "Готово, операция обновлена." if success else "Не нашёл правку для применения.",
+        reply_markup=main_menu(),
+    )
+
+
+@router.callback_query(F.data == "cancel_edit_transaction")
+async def cb_cancel_edit_transaction(call: CallbackQuery, state: FSMContext):
+    await state.update_data(pending_transaction_edit=None)
+    await call.message.edit_text("Ок, не меняю операцию.", reply_markup=main_menu())
+
+
 @router.callback_query(F.data == "settings")
 async def cb_settings(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1764,6 +1895,65 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                     InlineKeyboardButton(text="Не то, список", callback_data="recent"),
                 ],
                 [InlineKeyboardButton(text="Удалить по номеру", callback_data="delete_by_id")],
+            ]),
+        )
+        return True
+
+    if name == "edit_transaction":
+        from app.services.transaction_commands import find_transaction_for_edit
+
+        tx, variants = await find_transaction_for_edit(message.from_user.id, params.get("text") or text)
+        if not tx:
+            if variants:
+                await message.answer(
+                    "Нашёл несколько похожих операций:\n"
+                    + "\n".join(_format_tx_preview(item) for item in variants)
+                    + "\n\nВыбери операцию из списка или напиши её номер и правку.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ]),
+                )
+                return True
+            txs = await get_recent_transactions(message.from_user.id, limit=8)
+            text_for_user = "Не понял, какую операцию изменить."
+            if txs:
+                text_for_user += "\n\nПоследние операции:\n" + _format_recent_tx_lines(txs)
+                text_for_user += "\n\nОткрой список, выбери операцию и напиши правку обычными словами."
+            await message.answer(
+                text_for_user,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        current, updated = await _build_transaction_edit(message.from_user.id, params.get("text") or text, tx[0])
+        if not current:
+            await message.answer("Операция не найдена.", reply_markup=main_menu())
+            return True
+        if not updated:
+            await message.answer(
+                "Операцию нашёл, но не понял, что именно изменить. Напиши проще: «измени дату на 05.07» или «исправь сумму на 1023 руб».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        await state.update_data(pending_transaction_edit=updated)
+        await message.answer(
+            "Изменить операцию?\n\n"
+            + "Было: " + _format_current_tx(current) + "\n"
+            + "Будет: " + _format_current_tx(updated),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Да, изменить", callback_data="confirm_edit_transaction"),
+                    InlineKeyboardButton(text="Отмена", callback_data="cancel_edit_transaction"),
+                ],
+                [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
             ]),
         )
         return True

@@ -209,6 +209,17 @@ def _fallback_transaction_edit_parse(text: str) -> dict:
         parsed["day"] = int(date_match.group(1))
         parsed["month"] = int(date_match.group(2))
         parsed["year"] = int(date_match.group(3)) if date_match.group(3) else date.today().year
+    else:
+        word_date_match = re.search(
+            r"\b(?:на|к|за)\s+(\d{1,2})\s+"
+            r"(январ[ья]|феврал[ья]|март[а]?|апрел[ья]|ма[йя]|июн[ья]|июл[ья]|август[а]?|сентябр[ья]|октябр[ья]|ноябр[ья]|декабр[ья])",
+            lower,
+        )
+        if word_date_match:
+            period = _month_from_text(word_date_match.group(2))
+            if period:
+                parsed["day"] = int(word_date_match.group(1))
+                parsed["year"], parsed["month"] = period
 
     category_match = re.search(
         r"(?:категори[яю]|стать[яю]|раздел)?\s*(?:на|в)\s+([а-яёa-z0-9 /-]{2,})$",
@@ -324,3 +335,19 @@ async def find_transaction_for_category_change(user_id: int, text: str, parsed: 
     if len(rows) == 1:
         return _tx_tuple(rows[0]), []
     return None, [_tx_tuple(row) for row in rows]
+
+
+async def find_transaction_for_edit(user_id: int, text: str):
+    lower = (text or "").lower()
+    tx_match = re.search(r"(?:#|транзакци[яюи]\s*|операци[яюи]\s*|номер\s*)(\d+)", lower)
+    if tx_match:
+        row = await fetchone(
+            """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment, c.name
+               FROM transactions t
+               LEFT JOIN categories c ON t.category_id = c.id
+               WHERE t.user_id=%s AND t.id=%s""",
+            (user_id, int(tx_match.group(1))),
+        )
+        return _tx_tuple(row) if row else None, []
+
+    return await find_transaction_from_text(user_id, text)

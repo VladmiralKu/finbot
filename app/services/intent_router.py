@@ -99,6 +99,29 @@ def _looks_like_category_or_article_edit(lower: str) -> bool:
     return action_like and object_like
 
 
+def _looks_like_transaction_edit(lower: str) -> bool:
+    action_like = (
+        "измени" in lower
+        or "изменить" in lower
+        or "исправ" in lower
+        or "помен" in lower
+        or "смени" in lower
+        or "перенеси" in lower
+        or "перенести" in lower
+        or "поставь" in lower
+    )
+    field_like = (
+        "дат" in lower
+        or "сумм" in lower
+        or "коммент" in lower
+        or "описан" in lower
+        or "категор" in lower
+        or "стать" in lower
+    )
+    object_like = "транзакц" in lower or "операц" in lower or _has_transaction_pointer(lower)
+    return action_like and field_like and object_like
+
+
 async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
     lower = (text or "").lower().strip()
 
@@ -138,6 +161,14 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "confidence": 0.88,
             "params": {},
             "needs_confirmation": False,
+        }
+
+    if _looks_like_transaction_edit(lower):
+        return {
+            "intent": "edit_transaction",
+            "confidence": 0.88,
+            "params": {"text": text},
+            "needs_confirmation": True,
         }
 
     if _looks_like_category_change(lower) and _has_transaction_pointer(lower):
