@@ -64,6 +64,8 @@ async def render_categories_text(user_id: int) -> str:
     text += (
         "\n\nЧтобы изменить статьи, открой «Ручной ввод» → «Расход» или «Доход» "
         "и напиши: «Заменить Кафе на Рестораны», «Добавить Подарки» или «Удалить Старую статью»."
+        "\n\nМожно не разбираться в меню: открой ИИ-помощник и обычными словами попроси настроить категории, "
+        "перенести транзакции, создать календарь платежей или поправить старые записи."
     )
     return text
 
@@ -85,6 +87,8 @@ async def cmd_start(message: Message, state: FSMContext):
         "За неделю мы уже сможем собрать плановый бюджет и найти первые места, где деньги утекают незаметно.\n\n"
         "Не нужно вести таблицы.\n"
         "Просто рассказывай мне, что купил или получил — текстом или голосом.\n\n"
+        "Если не хочется разбираться в кнопках, открой ИИ-помощник и скажи обычными словами, что настроить: "
+        "категории, транзакции, календарь платежей, заметки или цели.\n\n"
         "Давай попробуем.\n"
         "На что ты сегодня уже потратил деньги?",
         reply_markup=MAIN_REPLY_KB,
@@ -143,7 +147,7 @@ async def cb_add_expense(call: CallbackQuery, state: FSMContext):
     await state.set_state(AddTransaction.choosing_category)
     await state.update_data(tx_type="expense")
     await call.message.edit_text(
-        "Выбери категорию расхода:",
+        await render_categories_text(call.from_user.id) + "\n\nВыбери категорию расхода:",
         reply_markup=categories_keyboard(categories, "cat", back_callback="manual_input"),
     )
 
@@ -168,7 +172,7 @@ async def cb_add_income(call: CallbackQuery, state: FSMContext):
     await state.set_state(AddTransaction.choosing_category)
     await state.update_data(tx_type="income")
     await call.message.edit_text(
-        "Выбери источник дохода:",
+        await render_categories_text(call.from_user.id) + "\n\nВыбери источник дохода:",
         reply_markup=categories_keyboard(categories, "cat", back_callback="manual_input"),
     )
 
