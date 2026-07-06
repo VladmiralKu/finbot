@@ -85,6 +85,20 @@ def _is_explicit_transaction_request(lower: str, source: str) -> bool:
     return any(marker in lower for marker in action_markers)
 
 
+def _looks_like_category_or_article_edit(lower: str) -> bool:
+    action_like = (
+        "замени" in lower
+        or "заменить" in lower
+        or "запени" in lower
+        or "помен" in lower
+        or "смени" in lower
+        or "сменить" in lower
+        or "переимен" in lower
+    )
+    object_like = "категор" in lower or "стать" in lower or "раздел" in lower
+    return action_like and object_like
+
+
 async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
     lower = (text or "").lower().strip()
 
@@ -134,11 +148,20 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "needs_confirmation": True,
         }
 
+    if _looks_like_category_or_article_edit(lower) and not _has_transaction_pointer(lower):
+        return {
+            "intent": "clarify_category_or_transaction_edit",
+            "confidence": 0.78,
+            "params": {"text": text},
+            "needs_confirmation": True,
+        }
+
     category_like = (
         "категор" in lower
         or "переимен" in lower
         or "замени" in lower
         or "заменить" in lower
+        or "запени" in lower
         or "постоянн" in lower
         or "переменн" in lower
     )

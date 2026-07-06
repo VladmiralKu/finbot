@@ -18,7 +18,8 @@ def _strip_category_word(value: str) -> str:
 def _looks_like_category_command(text: str) -> bool:
     lower = text.lower()
     markers = (
-        "категор", "переимен", "замени", "заменить", "добав", "удали",
+        "категор", "переимен", "замени", "заменить", "запени", "помен",
+        "смени", "сменить", "добав", "удали",
         "постоянн", "переменн",
     )
     return any(marker in lower for marker in markers)
@@ -54,6 +55,7 @@ async def parse_category_command(user_id: int, text: str, scope_type: str) -> di
         return None
 
     source = text.strip()
+    source = re.sub(r"\bзапени\b", "замени", source, flags=re.IGNORECASE)
     lower = source.lower()
 
     kind = None
@@ -94,6 +96,19 @@ async def parse_category_command(user_id: int, text: str, scope_type: str) -> di
             "old_name": _strip_category_word(match.group(1)),
             "new_name": _strip_category_word(match.group(2)),
             "confidence": 0.92,
+        }
+
+    match = re.search(
+        r"(?:категори[яю]|стать[яю]|раздел)\s+(.+?)\s+(?:замени(?:ть)?|поменяй|поменять|смени|сменить|переименуй|переименовать)\s+(?:на|в)\s+(.+)$",
+        source,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return {
+            "intent": "rename_category",
+            "old_name": _strip_category_word(match.group(1)),
+            "new_name": _strip_category_word(match.group(2)),
+            "confidence": 0.9,
         }
 
     match = re.search(r"(?:добавь|добавить)\s+(?:категори[яю]\s+)?(.+)$", source, flags=re.IGNORECASE)

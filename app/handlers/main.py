@@ -48,6 +48,21 @@ def _is_no_spend_reply(text: str) -> bool:
     return normalized in NO_SPEND_REPLIES
 
 
+def _looks_like_edit_confusion(text: str) -> bool:
+    lower = (text or "").lower()
+    action_like = (
+        "замени" in lower
+        or "заменить" in lower
+        or "запени" in lower
+        or "помен" in lower
+        or "смени" in lower
+        or "сменить" in lower
+        or "переимен" in lower
+    )
+    object_like = "категор" in lower or "стать" in lower or "раздел" in lower
+    return action_like and object_like
+
+
 async def render_categories_text(user_id: int) -> str:
     cats = await get_categories(user_id)
     if not cats:
@@ -825,9 +840,11 @@ async def cb_edit_pick(call: CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(
         "Текущая транзакция: " + current.strip() + chr(10) + chr(10) +
-        "Введи новые данные в формате:" + chr(10) +
-        "ДД.ММ -500 Категория комментарий" + chr(10) + chr(10) +
-        "Пример: 13.06 -500 Еда кофе с молоком",
+        "Напиши, что изменить, обычными словами:" + chr(10) +
+        "«поставь категорию Развитие»" + chr(10) +
+        "«исправь сумму на 1200 руб»" + chr(10) +
+        "«измени комментарий на аптека»" + chr(10) + chr(10) +
+        "Можно и старым форматом: 13.06 -500 Еда кофе с молоком",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data=f"txlist:{year}:{month}")]
@@ -835,46 +852,110 @@ async def cb_edit_pick(call: CallbackQuery, state: FSMContext):
     )
 
 
-@router.message(EditTxState.waiting_value, F.text)
-async def msg_edit_tx_value(message: Message, state: FSMContext):
+async def _apply_edit_tx_text(message: Message, state: FSMContext, text: str):
     from app.database import get_categories
     from app.parser import parse_quick_input
+    from app.services.transaction_commands import parse_transaction_edit
     data = await state.get_data()
     tx_id = data['tx_id']
     year = data.get('year', '')
     month = data.get('month', '')
 
-    parsed = parse_quick_input(message.text)
-    if not parsed or not parsed.get('amount'):
-        await message.answer("Не удалось распознать. Попробуй формат: 13.06 -500 Еда кофе")
+    tx = await fetchone(
+        "SELECT t.id, t.amount, t.type, t.comment, t.transaction_date, t.category_id, c.name as cat_name "
+        "FROM transactions t LEFT JOIN categories c ON t.category_id = c.id "
+        "WHERE t.id = %s AND t.user_id = %s",
+        (tx_id, message.from_user.id)
+    )
+    if not tx:
+        await state.clear()
+        await message.answer("Транзакция не найдена.", reply_markup=main_menu())
         return
 
-    amount = parsed['amount']
-    type_ = parsed['type']
-    date = parsed.get('transaction_date')
-    hint = parsed.get('category_hint', '')
-    comment = parsed.get('comment', '')
+    if isinstance(tx, dict):
+        current = {
+            "id": tx.get("id"),
+            "amount": float(tx.get("amount") or 0),
+            "type": tx.get("type") or "expense",
+            "comment": tx.get("comment") or "",
+            "transaction_date": tx.get("transaction_date"),
+            "category_id": tx.get("category_id"),
+            "category_name": tx.get("cat_name") or "",
+        }
+    else:
+        current = {
+            "id": tx[0],
+            "amount": float(tx[1] or 0),
+            "type": tx[2] or "expense",
+            "comment": tx[3] or "",
+            "transaction_date": tx[4],
+            "category_id": tx[5],
+            "category_name": tx[6] if len(tx) > 6 else "",
+        }
+
+    ai_parsed = await parse_transaction_edit(message.from_user.id, text, current)
+    amount = ai_parsed.get("amount")
+    category_id = ai_parsed.get("new_category_id")
+    matched_cat = None
+    comment = ai_parsed.get("comment")
+    date = current["transaction_date"]
+
+    if ai_parsed.get("day") and ai_parsed.get("month"):
+        try:
+            date = datetime(
+                int(ai_parsed.get("year") or datetime.now().year),
+                int(ai_parsed["month"]),
+                int(ai_parsed["day"]),
+            ).date()
+        except ValueError:
+            date = current["transaction_date"]
+
+    if category_id:
+        matched_cat = {
+            "id": category_id,
+            "name": ai_parsed.get("new_category_name"),
+        }
+
+    if amount is None and not category_id and comment is None and date == current["transaction_date"]:
+        parsed = parse_quick_input(text)
+        if not parsed or not parsed.get('amount'):
+            await message.answer(
+                "Не удалось распознать. Напиши проще, например: «поставь категорию Развитие» "
+                "или «исправь сумму на 1200 руб».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Отмена", callback_data=f"txlist:{year}:{month}")]
+                ]),
+            )
+            return
+        amount = parsed['amount']
+        date = parsed.get('transaction_date')
+        hint = parsed.get('category_hint', '')
+        comment = parsed.get('comment', '')
+        type_ = parsed['type']
+    else:
+        hint = ""
+        type_ = current["type"]
+        if amount is None:
+            amount = current["amount"]
+        if comment is None:
+            comment = current["comment"]
 
     cats = await get_categories(message.from_user.id)
-    category_id = None
-    matched_cat = None
-    for cat in cats:
-        if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
-            category_id = cat['id']
-            matched_cat = cat
-            break
-    # Если категория найдена — берём тип из неё
-    if matched_cat:
-        type_ = matched_cat.get('type', type_)
     if not category_id:
         for cat in cats:
-            if 'прочие' in cat['name'].lower() and cat.get('type') == type_:
+            if hint and (hint.lower().strip() in cat['name'].lower() or cat['name'].lower() in hint.lower().strip()):
                 category_id = cat['id']
+                matched_cat = cat
                 break
     if not category_id:
+        category_id = current["category_id"]
+
+    if matched_cat:
+        type_ = matched_cat.get('type', type_)
+    elif category_id:
         for cat in cats:
-            if cat.get('type') == type_:
-                category_id = cat['id']
+            if cat["id"] == category_id:
+                type_ = cat.get("type", type_)
                 break
 
     try:
@@ -893,6 +974,34 @@ async def msg_edit_tx_value(message: Message, state: FSMContext):
     except Exception as e:
         await state.clear()
         await message.answer("Ошибка: " + str(e))
+
+
+@router.message(EditTxState.waiting_value, F.text)
+async def msg_edit_tx_value(message: Message, state: FSMContext):
+    await _apply_edit_tx_text(message, state, message.text or "")
+
+
+@router.message(EditTxState.waiting_value, F.voice)
+async def msg_edit_tx_voice(message: Message, state: FSMContext):
+    from app.handlers.voice import transcribe_voice
+
+    thinking = await message.answer("Распознаю голос...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        text = await transcribe_voice(file_bytes.read())
+        await thinking.delete()
+    except Exception as e:
+        await thinking.delete()
+        await message.answer("Не удалось распознать голос: " + str(e))
+        return
+
+    if not text:
+        await message.answer("Не удалось распознать голос. Попробуй ещё раз.")
+        return
+
+    await message.answer("Распознано: " + text)
+    await _apply_edit_tx_text(message, state, text)
 
 
 # --- Удаление по номеру ---
@@ -1448,6 +1557,21 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         )
         return True
 
+    if name == "clarify_category_or_transaction_edit":
+        await state.update_data(action_pending_text=params.get("text") or text)
+        await message.answer(
+            "Уточню, что именно поменять:\n\n"
+            "• Категории/статьи — это список твоих статей расходов и доходов.\n"
+            "• Операции/транзакции — это уже записанные покупки, доходы и платежи.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Настроить статьи", callback_data="clarify_edit_categories")],
+                [InlineKeyboardButton(text="Редактировать операции", callback_data="clarify_edit_transactions")],
+                [InlineKeyboardButton(text="Открыть ИИ-помощник", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
     if name == "delete_transaction":
         tx = None
         variants = []
@@ -1670,6 +1794,65 @@ async def cb_ask_ai_pending(call: CallbackQuery, state: FSMContext):
     await send_text_to_ai_assistant(call.message, state, call.from_user.id, user_text)
 
 
+@router.callback_query(F.data == "clarify_edit_categories")
+async def cb_clarify_edit_categories(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    user_text = data.get("action_pending_text")
+    if not user_text:
+        await call.message.answer(
+            "Не нашёл фразу для настройки статей. Напиши её ещё раз.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    from app.services.category_commands import parse_category_command, apply_category_command
+
+    result_text = None
+    for scope_type in ("expense", "income"):
+        command = await parse_category_command(call.from_user.id, user_text, scope_type)
+        if command and command.get("intent") != "unknown":
+            result = await apply_category_command(call.from_user.id, command, scope_type)
+            if "не найдена" not in result.lower():
+                result_text = result
+                break
+            result_text = result_text or result
+
+    if result_text:
+        await call.message.answer(
+            result_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Показать категории", callback_data="categories_list")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+    else:
+        await call.message.answer(
+            "Не понял, какую статью заменить. Напиши так: «замени категорию Здоровье на Развитие».",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Показать категории", callback_data="categories_list")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+
+
+@router.callback_query(F.data == "clarify_edit_transactions")
+async def cb_clarify_edit_transactions(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await call.message.answer(
+        "Ок, редактируем операции.\n\n"
+        "Напиши номер или сумму операции и новую категорию. Например:\n"
+        "«поменяй транзакцию #42 на Развитие»\n"
+        "или «поменяй операцию 1200 руб за июль на Здоровье».",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Последние операции", callback_data="recent")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
 @router.message(F.text & ~F.text.startswith("/"), StateFilter(default_state))
 async def msg_free_text(message: Message, state: FSMContext):
     # ИИ-хелпер — триггер по ключевым фразам
@@ -1702,6 +1885,20 @@ async def msg_free_text(message: Message, state: FSMContext):
 
     handled = await handle_intent_message(message, state, message.text, source="text")
     if not handled:
+        if _looks_like_edit_confusion(message.text):
+            await state.update_data(action_pending_text=message.text)
+            await message.answer(
+                "Уточню, что именно поменять:\n\n"
+                "• Категории/статьи — это список твоих статей расходов и доходов.\n"
+                "• Операции/транзакции — это уже записанные покупки, доходы и платежи.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Настроить статьи", callback_data="clarify_edit_categories")],
+                    [InlineKeyboardButton(text="Редактировать операции", callback_data="clarify_edit_transactions")],
+                    [InlineKeyboardButton(text="Открыть ИИ-помощник", callback_data="ai_assistant")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return
         await state.update_data(ai_pending_text=message.text)
         await message.answer(
             "Не понял это как транзакцию или команду. Могу передать фразу в ИИ-помощник.",
