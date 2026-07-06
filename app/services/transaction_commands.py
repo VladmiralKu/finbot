@@ -41,6 +41,51 @@ def _tx_tuple(row):
     return (row[0], row[1], row[2], row[3], row[4], row[5])
 
 
+def _fallback_category_change_parse(text: str) -> dict:
+    lower = (text or "").lower()
+    parsed = {"tx_id": None, "amount": None, "new_category": None, "month": None, "year": None}
+
+    tx_match = re.search(r"(?:#|транзакци[яюи]\s*|операци[яюи]\s*|номер\s*)(\d+)", lower)
+    if tx_match:
+        parsed["tx_id"] = int(tx_match.group(1))
+
+    amount_match = re.search(
+        r"(?:сумм[ауы]?\s*)?(\d[\d\s]*(?:[,.]\d+)?)\s*(?:р|руб|рубл)",
+        lower,
+    )
+    if amount_match:
+        parsed["amount"] = float(amount_match.group(1).replace(" ", "").replace(",", "."))
+
+    if not parsed["tx_id"] and not parsed["amount"]:
+        loose_tx_match = re.search(r"(?:^|\s)#?(\d{2,})(?=.*\b(?:на|в)\b)", lower)
+        if loose_tx_match:
+            parsed["tx_id"] = int(loose_tx_match.group(1))
+
+    period = _month_from_text(lower)
+    if period:
+        parsed["year"], parsed["month"] = period
+
+    category_match = re.search(r"\b(?:на|в)\s+([а-яёa-z0-9 /-]{2,})$", lower)
+    if category_match:
+        category_text = category_match.group(1).strip(" .,!?:;-")
+        category_text = re.sub(r"\b(?:пожалуйста|плиз|спасибо)\b", "", category_text).strip()
+        parsed["new_category"] = category_text or None
+
+    return parsed
+
+
+def _json_object_from_text(content: str) -> dict:
+    cleaned = (content or "").strip()
+    cleaned = cleaned.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    match = re.search(r"\{.*\}", cleaned, re.S)
+    if match:
+        cleaned = match.group(0)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {}
+
+
 async def find_transaction_from_text(user_id: int, text: str):
     txs = await extract_transactions_from_text(user_id, text, source="command")
     parsed = txs[0] if txs else {}
@@ -95,6 +140,7 @@ async def find_transaction_from_text(user_id: int, text: str):
 
 
 async def parse_category_change(user_id: int, text: str) -> dict:
+    fallback = _fallback_category_change_parse(text)
     categories = await get_categories(user_id)
     category_names = [cat["name"] for cat in categories]
     prompt = (
@@ -122,11 +168,10 @@ async def parse_category_change(user_id: int, text: str) -> dict:
             timeout=15.0,
         )
     content = response.json()["choices"][0]["message"]["content"].strip()
-    content = content.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        parsed = {}
+    parsed = _json_object_from_text(content)
+    for key, value in fallback.items():
+        if parsed.get(key) in (None, "") and value not in (None, ""):
+            parsed[key] = value
 
     new_category_text = parsed.get("new_category") or text
     category = await match_category(

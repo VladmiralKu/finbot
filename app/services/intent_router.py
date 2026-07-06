@@ -31,6 +31,27 @@ def _month_from_text(text: str) -> tuple[int, int] | None:
     return None
 
 
+def _looks_like_category_change(lower: str) -> bool:
+    action_like = (
+        "помен" in lower
+        or "измени" in lower
+        or "изменить" in lower
+        or "смен" in lower
+        or "перенеси" in lower
+        or "перенести" in lower
+    )
+    target_like = (
+        "категор" in lower
+        or "стать" in lower
+        or "раздел" in lower
+        or re.search(r"(?:^|\s)(?:#\d+|\d{2,})(?:\s|$)", lower)
+        or "транзакц" in lower
+        or "операц" in lower
+    )
+    destination_like = re.search(r"\b(?:на|в)\s+[а-яёa-z0-9 /-]{2,}$", lower)
+    return bool(action_like and target_like and destination_like)
+
+
 async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
     lower = (text or "").lower().strip()
 
@@ -72,11 +93,7 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "needs_confirmation": False,
         }
 
-    if (
-        "транзакц" in lower
-        and "категор" in lower
-        and ("помен" in lower or "измени" in lower or "смен" in lower or "перенеси" in lower)
-    ):
+    if _looks_like_category_change(lower):
         return {
             "intent": "change_transaction_category",
             "confidence": 0.86,
