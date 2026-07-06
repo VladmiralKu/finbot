@@ -430,18 +430,19 @@ async def render_month_report(user_id: int, year: int, month: int):
     summary = await get_monthly_summary(user_id, year, month)
     breakdown = await get_category_breakdown(user_id, year, month)
     month_name = str(year) + "-" + str(month).zfill(2)
-    cash_balance = summary["income"] - summary["expense_variable"]
+    actual_expense = summary["total_expense"]
+    cash_balance = summary["income"] - actual_expense
     text = (
         f"📊 <b>Отчёт за {month_name}</b>\n\n"
         f"💰 Доходы:             <b>{summary['income']:,.0f} ₽</b>\n"
-        f"🛒 Расходы:            <b>{summary['expense_variable']:,.0f} ₽</b>\n"
+        f"🛒 Расходы:            <b>{actual_expense:,.0f} ₽</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"{'✅' if cash_balance >= 0 else '🔴'} Остаток ДС: "
         f"<b>{cash_balance:+,.0f} ₽</b>\n\n"
     )
-    # Категории с % от доходов (если доходов нет — % от обычных расходов)
+    # Категории с % от доходов (если доходов нет — % от фактических расходов)
     income = summary['income']
-    total_expense = summary['expense_variable']
+    total_expense = actual_expense
     pct_base = income if income > 0 else (total_expense if total_expense > 0 else 0)
     balance = cash_balance
     balance_pct = (balance / pct_base * 100) if pct_base else 0
@@ -451,12 +452,7 @@ async def render_month_report(user_id: int, year: int, month: int):
     expense_cats = {
         cat['name']: 0.0
         for cat in all_cats
-        if cat.get('type') == 'expense' and cat.get('kind') != 'fixed'
-    }
-    planned_cats = {
-        cat['name']: 0.0
-        for cat in all_cats
-        if cat.get('type') == 'expense' and cat.get('kind') == 'fixed'
+        if cat.get('type') == 'expense'
     }
 
     # Заполняем суммами и kind из breakdown
@@ -464,12 +460,9 @@ async def render_month_report(user_id: int, year: int, month: int):
         name = row['name']
         if name in expense_cats:
             expense_cats[name] = float(row['total'])
-        elif name in planned_cats:
-            planned_cats[name] = float(row['total'])
 
     # Сортируем по убыванию
     sorted_cats = sorted(expense_cats.items(), key=lambda x: x[1], reverse=True)
-    sorted_planned = sorted(planned_cats.items(), key=lambda x: x[1], reverse=True)
 
     if sorted_cats:
         text += "📋 <b>Расходы:</b>\n"
@@ -477,10 +470,24 @@ async def render_month_report(user_id: int, year: int, month: int):
             pct = (total / pct_base * 100) if pct_base else 0
             text += f"  🛒 {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
 
-    if sorted_planned:
+    planned_rows = await fetchall(
+        """SELECT name, amount, amount_is_approximate, next_trigger_date
+           FROM recurring_payments
+           WHERE user_id=%s
+             AND is_active=TRUE
+             AND type='expense'
+             AND EXTRACT(YEAR FROM next_trigger_date)=%s
+             AND EXTRACT(MONTH FROM next_trigger_date)=%s
+           ORDER BY next_trigger_date, name""",
+        (user_id, year, month),
+    )
+    if planned_rows:
+        planned_total = sum(float(row[1] or 0) for row in planned_rows)
         text += "\n🗓 <b>Планируемые расходы:</b>\n"
-        for name, total in sorted_planned:
-            text += f"  {name}: {total:,.0f} ₽\n"
+        text += f"  Итого: {planned_total:,.0f} ₽\n"
+        for name, amount, is_approx, next_date in planned_rows:
+            approx = "~" if is_approx else ""
+            text += f"  {next_date.strftime('%d.%m')} — {name}: {approx}{float(amount or 0):,.0f} ₽\n"
         text += "  <i>Не участвуют в формуле остатка ДС.</i>\n"
 
     # Добавляем % к остатку
