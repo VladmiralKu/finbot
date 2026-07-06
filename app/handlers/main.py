@@ -1937,6 +1937,7 @@ async def msg_free_text(message: Message, state: FSMContext):
 @router.message(Command("category"))
 async def cmd_category(message: Message):
     from app.database import get_categories, execute
+    from app.services.category_commands import normalize_category_display_name
     args = message.text.strip()[len("/category"):].strip()
 
     if not args or args == "list":
@@ -1956,7 +1957,7 @@ async def cmd_category(message: Message):
         if len(m) < 2:
             await message.answer('Формат: /category rename "Старое" "Новое"')
             return
-        old_name, new_name = m[0], m[1]
+        old_name, new_name = m[0], normalize_category_display_name(m[1])
         result = await execute(
             "UPDATE categories SET name=%s WHERE name=%s AND user_id=%s",
             (new_name, old_name, message.from_user.id)
@@ -1972,7 +1973,7 @@ async def cmd_category(message: Message):
         if not m:
             await message.answer('Формат: /category add "Название" expense')
             return
-        name = m[0]
+        name = normalize_category_display_name(m[0])
         kind = "income" if type_ == "income" else "variable"
         await execute(
             "INSERT INTO categories (user_id, name, type, kind) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",

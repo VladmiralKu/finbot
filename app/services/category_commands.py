@@ -5,9 +5,15 @@ from app.database import execute, fetchall, fetchone, get_categories
 from app.services.category_matcher import normalize_name
 
 
-def _clean_name(value: str) -> str:
+def normalize_category_display_name(value: str) -> str:
     value = re.sub(r"^[\"'«]+|[\"'»]+$", "", (value or "").strip())
-    return re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[.!?…]+$", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return " ".join(word[:1].upper() + word[1:] for word in value.split(" "))
+
+
+def _clean_name(value: str) -> str:
+    return normalize_category_display_name(value)
 
 
 def _strip_category_word(value: str) -> str:
