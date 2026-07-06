@@ -1489,6 +1489,37 @@ def _format_tx_preview(tx) -> str:
     return f"#{tx_id} {tx_date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {category or ''}{comment_part}"
 
 
+def _format_recent_tx_lines(txs, limit: int = 8) -> str:
+    lines = []
+    for tx in txs[:limit]:
+        sign = "-" if tx["type"] == "expense" else "+"
+        date_value = tx["transaction_date"].strftime("%d.%m")
+        comment = f" | {tx['comment']}" if tx.get("comment") else ""
+        lines.append(
+            f"#{tx['id']} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
+            f"{tx.get('category_name') or ''}{comment}"
+        )
+    return "\n".join(lines)
+
+
+async def _answer_delete_needs_choice(message: Message, user_id: int, prefix: str):
+    txs = await get_recent_transactions(user_id, limit=8)
+    text = prefix
+    if txs:
+        text += "\n\nПоследние операции:\n" + _format_recent_tx_lines(txs)
+        text += "\n\nНажми «Удалить по номеру» и отправь номер нужной операции."
+    else:
+        text += "\n\nПока нет операций для удаления."
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Удалить по номеру", callback_data="delete_by_id")],
+            [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
 async def handle_intent_message(message: Message, state: FSMContext, text: str, source: str = "text") -> bool:
     from app.database import (
         get_last_transaction,
@@ -1560,13 +1591,10 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
     if name == "clarify_category_or_transaction_edit":
         await state.update_data(action_pending_text=params.get("text") or text)
         await message.answer(
-            "Уточню, что именно поменять:\n\n"
-            "• Категории/статьи — это список твоих статей расходов и доходов.\n"
-            "• Операции/транзакции — это уже записанные покупки, доходы и платежи.",
+            "Что меняем?",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Настроить статьи", callback_data="clarify_edit_categories")],
-                [InlineKeyboardButton(text="Редактировать операции", callback_data="clarify_edit_transactions")],
-                [InlineKeyboardButton(text="Открыть ИИ-помощник", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Статьи расходов/доходов", callback_data="clarify_edit_categories")],
+                [InlineKeyboardButton(text="Записанные операции", callback_data="clarify_edit_transactions")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
         )
@@ -1592,15 +1620,15 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                     + "\n\nНапиши номер нужной транзакции.",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="Удалить по номеру", callback_data="delete_by_id")],
+                        [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
                         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                     ]),
                 )
                 return True
-            await message.answer(
-                "Не нашёл транзакцию для удаления. Напиши номер, например: «удали транзакцию 42».",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ]),
+            await _answer_delete_needs_choice(
+                message,
+                message.from_user.id,
+                "Не понял, какую операцию удалить.",
             )
             return True
 
@@ -1609,8 +1637,9 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="Да, удалить", callback_data=f"confirm_delete_intent:{tx[0]}"),
-                    InlineKeyboardButton(text="Нет, введу номер", callback_data="cancel_delete_intent"),
+                    InlineKeyboardButton(text="Не то, список", callback_data="recent"),
                 ],
+                [InlineKeyboardButton(text="Удалить по номеру", callback_data="delete_by_id")],
             ]),
         )
         return True
@@ -1842,12 +1871,9 @@ async def cb_clarify_edit_categories(call: CallbackQuery, state: FSMContext):
 async def cb_clarify_edit_transactions(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.answer(
-        "Ок, редактируем операции.\n\n"
-        "Напиши номер или сумму операции и новую категорию. Например:\n"
-        "«поменяй транзакцию #42 на Развитие»\n"
-        "или «поменяй операцию 1200 руб за июль на Здоровье».",
+        "Выбери операцию из списка, потом напиши правку обычными словами.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Последние операции", callback_data="recent")],
+            [InlineKeyboardButton(text="Открыть операции", callback_data="recent")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),
     )
@@ -1888,13 +1914,10 @@ async def msg_free_text(message: Message, state: FSMContext):
         if _looks_like_edit_confusion(message.text):
             await state.update_data(action_pending_text=message.text)
             await message.answer(
-                "Уточню, что именно поменять:\n\n"
-                "• Категории/статьи — это список твоих статей расходов и доходов.\n"
-                "• Операции/транзакции — это уже записанные покупки, доходы и платежи.",
+                "Что меняем?",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Настроить статьи", callback_data="clarify_edit_categories")],
-                    [InlineKeyboardButton(text="Редактировать операции", callback_data="clarify_edit_transactions")],
-                    [InlineKeyboardButton(text="Открыть ИИ-помощник", callback_data="ai_assistant")],
+                    [InlineKeyboardButton(text="Статьи расходов/доходов", callback_data="clarify_edit_categories")],
+                    [InlineKeyboardButton(text="Записанные операции", callback_data="clarify_edit_transactions")],
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
             )
