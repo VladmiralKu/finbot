@@ -430,43 +430,58 @@ async def render_month_report(user_id: int, year: int, month: int):
     summary = await get_monthly_summary(user_id, year, month)
     breakdown = await get_category_breakdown(user_id, year, month)
     month_name = str(year) + "-" + str(month).zfill(2)
+    cash_balance = summary["income"] - summary["expense_variable"]
     text = (
         f"📊 <b>Отчёт за {month_name}</b>\n\n"
         f"💰 Доходы:             <b>{summary['income']:,.0f} ₽</b>\n"
-        f"🔒 Постоянные расходы: <b>{summary['expense_fixed']:,.0f} ₽</b>\n"
-        f"🛒 Переменные расходы: <b>{summary['expense_variable']:,.0f} ₽</b>\n"
+        f"🛒 Расходы:            <b>{summary['expense_variable']:,.0f} ₽</b>\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"{'✅' if summary['balance'] >= 0 else '🔴'} Остаток: "
-        f"<b>{summary['balance']:+,.0f} ₽</b>\n\n"
+        f"{'✅' if cash_balance >= 0 else '🔴'} Остаток ДС: "
+        f"<b>{cash_balance:+,.0f} ₽</b>\n\n"
     )
-    # Все расходные категории с % от доходов (если доходов нет — % от общих расходов)
+    # Категории с % от доходов (если доходов нет — % от обычных расходов)
     income = summary['income']
-    total_expense = summary['total_expense']
+    total_expense = summary['expense_variable']
     pct_base = income if income > 0 else (total_expense if total_expense > 0 else 0)
-    balance = summary['balance']
+    balance = cash_balance
     balance_pct = (balance / pct_base * 100) if pct_base else 0
 
     # Получаем все категории пользователя
     all_cats = await get_categories(user_id)
-    expense_cats = {cat['name']: 0.0 for cat in all_cats if cat.get('type') == 'expense'}
+    expense_cats = {
+        cat['name']: 0.0
+        for cat in all_cats
+        if cat.get('type') == 'expense' and cat.get('kind') != 'fixed'
+    }
+    planned_cats = {
+        cat['name']: 0.0
+        for cat in all_cats
+        if cat.get('type') == 'expense' and cat.get('kind') == 'fixed'
+    }
 
     # Заполняем суммами и kind из breakdown
-    expense_kinds = {cat['name']: 'variable' for cat in all_cats if cat.get('type') == 'expense'}
     for row in breakdown:
         name = row['name']
         if name in expense_cats:
             expense_cats[name] = float(row['total'])
-            expense_kinds[name] = row['kind']
+        elif name in planned_cats:
+            planned_cats[name] = float(row['total'])
 
     # Сортируем по убыванию
     sorted_cats = sorted(expense_cats.items(), key=lambda x: x[1], reverse=True)
+    sorted_planned = sorted(planned_cats.items(), key=lambda x: x[1], reverse=True)
 
     if sorted_cats:
-        text += "📋 <b>Расходы по категориям:</b>\n"
+        text += "📋 <b>Расходы:</b>\n"
         for name, total in sorted_cats:
             pct = (total / pct_base * 100) if pct_base else 0
-            icon = "🔒" if expense_kinds.get(name) == 'fixed' else "🛒"
-            text += f"  {icon} {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
+            text += f"  🛒 {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
+
+    if sorted_planned:
+        text += "\n🗓 <b>Планируемые расходы:</b>\n"
+        for name, total in sorted_planned:
+            text += f"  {name}: {total:,.0f} ₽\n"
+        text += "  <i>Не участвуют в формуле остатка ДС.</i>\n"
 
     # Добавляем % к остатку
     text = text.replace(
