@@ -33,6 +33,10 @@ class AddTransaction(StatesGroup):
     entering_comment  = State()
 
 
+class QuickCategoryRenameState(StatesGroup):
+    waiting_new_name = State()
+
+
 NO_SPEND_REPLIES = {
     "ничего",
     "ничего не тратил",
@@ -131,6 +135,126 @@ async def cb_categories_list(call: CallbackQuery):
         await render_categories_text(call.from_user.id),
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Быстрая смена статей", callback_data="quick_category_rename")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "quick_category_rename")
+async def cb_quick_category_rename(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    cats = await get_categories(call.from_user.id)
+    if not cats:
+        await call.message.edit_text(
+            "Категорий пока нет.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    income = [cat for cat in cats if cat.get("type") == "income"]
+    expense = [cat for cat in cats if cat.get("type") == "expense"]
+    buttons = []
+    if expense:
+        buttons.append([InlineKeyboardButton(text="Расходы", callback_data="noop")])
+        buttons.extend([
+            [InlineKeyboardButton(text=cat["name"], callback_data=f"quick_category_pick:{cat['id']}")]
+            for cat in expense
+        ])
+    if income:
+        buttons.append([InlineKeyboardButton(text="Доходы", callback_data="noop")])
+        buttons.extend([
+            [InlineKeyboardButton(text=cat["name"], callback_data=f"quick_category_pick:{cat['id']}")]
+            for cat in income
+        ])
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="categories_list")])
+    buttons.append([InlineKeyboardButton(text="Меню", callback_data="main_menu")])
+
+    await call.message.edit_text(
+        "Выбери статью, которую хочешь переименовать.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@router.callback_query(F.data.startswith("quick_category_pick:"))
+async def cb_quick_category_pick(call: CallbackQuery, state: FSMContext):
+    cat_id = int(call.data.split(":")[1])
+    row = await fetchone(
+        "SELECT id, name, type FROM categories WHERE id=%s AND user_id=%s",
+        (cat_id, call.from_user.id),
+    )
+    if not row:
+        await call.answer("Категория не найдена.", show_alert=True)
+        return
+
+    category_id, category_name, category_type = row
+    await state.set_state(QuickCategoryRenameState.waiting_new_name)
+    await state.update_data(
+        quick_category_id=category_id,
+        quick_category_name=category_name,
+        quick_category_type=category_type,
+    )
+    await call.message.edit_text(
+        f"Переименовываем статью «{category_name}».\n\n"
+        "Напиши новое название категории одним сообщением.\n"
+        "Я сохраню его с большой буквы и без точки в конце.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Выбрать другую", callback_data="quick_category_rename")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
+@router.message(QuickCategoryRenameState.waiting_new_name, F.text)
+async def msg_quick_category_new_name(message: Message, state: FSMContext):
+    from app.services.category_commands import normalize_category_display_name
+
+    data = await state.get_data()
+    category_id = data.get("quick_category_id")
+    old_name = data.get("quick_category_name")
+    category_type = data.get("quick_category_type")
+    new_name = normalize_category_display_name(message.text or "")
+
+    if not category_id or not old_name or not category_type:
+        await state.clear()
+        await message.answer(
+            "Не нашёл выбранную статью. Начни быструю смену заново.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Быстрая смена статей", callback_data="quick_category_rename")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+    if not new_name:
+        await message.answer("Напиши новое название категории, например: «Развитие».")
+        return
+
+    duplicate = await fetchone(
+        "SELECT id FROM categories WHERE user_id=%s AND type=%s AND lower(name)=lower(%s) AND id<>%s",
+        (message.from_user.id, category_type, new_name, category_id),
+    )
+    if duplicate:
+        await message.answer(
+            f"Статья «{new_name}» уже есть. Напиши другое название.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Выбрать другую", callback_data="quick_category_rename")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    await execute(
+        "UPDATE categories SET name=%s WHERE id=%s AND user_id=%s",
+        (new_name, category_id, message.from_user.id),
+    )
+    await state.clear()
+    await message.answer(
+        f"Готово: «{old_name}» теперь «{new_name}».",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Быстрая смена статей", callback_data="quick_category_rename")],
+            [InlineKeyboardButton(text="Показать категории", callback_data="categories_list")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),
     )
@@ -1945,6 +2069,7 @@ async def cmd_category(message: Message):
             await render_categories_text(message.from_user.id),
             parse_mode=None,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Быстрая смена статей", callback_data="quick_category_rename")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
         )
