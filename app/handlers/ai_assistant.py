@@ -122,6 +122,8 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
             "ДЕЙСТВИЯ (добавляй в конец ответа если нужно, только если разговор финансовый):\n"
             "Для внесения транзакции:\n"
             "TRANSACTION: -1500 Еда/Продукты\n"
+            "TRANSACTION используй только если пользователь явно просит записать/внести/добавить операцию. "
+            "Если пользователь просит найти, показать, проверить или проанализировать расход — не создавай TRANSACTION.\n"
             "Для сохранения цели:\n"
             "GOAL: накопить 200000 к августу 2026\n"
             "Для удаления неактуальной цели:\n"
@@ -151,6 +153,8 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
         "ДЕЙСТВИЯ (добавляй в конец ответа если нужно):\n"
         "Для внесения транзакции:\n"
         "TRANSACTION: -1500 Еда/Продукты\n"
+        "TRANSACTION используй только если пользователь явно просит записать/внести/добавить операцию. "
+        "Если пользователь просит найти, показать, проверить или проанализировать расход — не создавай TRANSACTION.\n"
         "Для сохранения цели:\n"
         "GOAL: накопить 200000 к августу 2026\n"
         "Для удаления неактуальной цели:\n"
@@ -262,7 +266,25 @@ async def delete_goal_by_query(user_id: int, query: str) -> tuple[bool, str]:
     return True, "Цель удалена: " + goal_text
 
 
-async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
+def _user_requested_transaction_action(user_message: str) -> bool:
+    lower = (user_message or "").lower()
+    lookup_markers = (
+        "найди", "найти", "покажи", "показать", "посмотри", "посмотреть",
+        "сколько", "какие", "какой", "какая", "где", "когда", "отчет", "отчёт",
+        "анализ", "проанализ", "с копейками",
+    )
+    if any(marker in lower for marker in lookup_markers):
+        return False
+    action_markers = (
+        "внеси", "внести", "запиши", "записать", "добавь", "добавить",
+        "потратил", "потратила", "потрачено", "купил", "купила", "оплатил",
+        "оплатила", "заработал", "заработала", "получил", "получила",
+        "доход", "расход",
+    )
+    return any(marker in lower for marker in action_markers)
+
+
+async def process_actions(user_id: int, ai_text: str, user_message: str = "") -> tuple[str, str]:
     from app.database import execute
     from app.services.insights import build_transaction_insight
     from app.services.transaction_ai import extract_transactions_from_text
@@ -274,6 +296,8 @@ async def process_actions(user_id: int, ai_text: str) -> tuple[str, str]:
     for line in ai_text.split("\n"):
         if line.startswith("TRANSACTION:"):
             tx_str = line.replace("TRANSACTION:", "").strip()
+            if not _user_requested_transaction_action(user_message):
+                continue
             try:
                 transactions = await extract_transactions_from_text(user_id, tx_str, source="ai")
                 for tx in transactions:
@@ -455,7 +479,7 @@ async def msg_ai_voice(message: Message, state: FSMContext):
         await save_ai_message(message.from_user.id, 'user', text)
         await save_ai_message(message.from_user.id, 'assistant', ai_text)
         await log_ai_usage(message.from_user.id)
-        clean_text, actions_log = await process_actions(message.from_user.id, ai_text)
+        clean_text, actions_log = await process_actions(message.from_user.id, ai_text, text)
         await message.answer(
             "🗣️ " + clean_text + actions_log,
             parse_mode=None,
@@ -509,7 +533,7 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         return
 
     await state.update_data(history=new_history[-20:])
-    clean_text, actions_log = await process_actions(message.from_user.id, ai_text)
+    clean_text, actions_log = await process_actions(message.from_user.id, ai_text, user_text)
 
     await thinking_msg.delete()
 

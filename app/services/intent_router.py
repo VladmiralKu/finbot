@@ -52,6 +52,39 @@ def _looks_like_category_change(lower: str) -> bool:
     return bool(action_like and target_like and destination_like)
 
 
+def _has_transaction_pointer(lower: str) -> bool:
+    return bool(
+        "транзакц" in lower
+        or "операц" in lower
+        or re.search(r"(?:^|\s)#\d+(?:\s|$)", lower)
+        or re.search(r"\d[\d\s]*(?:[,.]\d+)?\s*(?:р|руб|рубл)", lower)
+        or re.search(r"\b(?:сумм[ауы]?|номер)\s+\d", lower)
+    )
+
+
+def _is_lookup_request(lower: str) -> bool:
+    lookup_markers = (
+        "найди", "найти", "покажи", "показать", "посмотри", "посмотреть",
+        "сколько", "какие", "какой", "какая", "где", "когда", "отчет", "отчёт",
+        "анализ", "проанализ", "с копейками",
+    )
+    return any(marker in lower for marker in lookup_markers)
+
+
+def _is_explicit_transaction_request(lower: str, source: str) -> bool:
+    if source not in ("ai_chat", "ai_voice"):
+        return True
+    if _is_lookup_request(lower):
+        return False
+    action_markers = (
+        "внеси", "внести", "запиши", "записать", "добавь", "добавить",
+        "потратил", "потратила", "потрачено", "купил", "купила", "оплатил",
+        "оплатила", "заработал", "заработала", "получил", "получила",
+        "доход", "расход",
+    )
+    return any(marker in lower for marker in action_markers)
+
+
 async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
     lower = (text or "").lower().strip()
 
@@ -93,7 +126,7 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "needs_confirmation": False,
         }
 
-    if _looks_like_category_change(lower):
+    if _looks_like_category_change(lower) and _has_transaction_pointer(lower):
         return {
             "intent": "change_transaction_category",
             "confidence": 0.86,
@@ -132,7 +165,9 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "needs_confirmation": True,
         }
 
-    transactions = await extract_transactions_from_text(user_id, text, source)
+    transactions = []
+    if _is_explicit_transaction_request(lower, source):
+        transactions = await extract_transactions_from_text(user_id, text, source)
     if transactions:
         return {
             "intent": "add_transaction",
