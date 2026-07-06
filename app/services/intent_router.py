@@ -118,7 +118,18 @@ def _looks_like_transaction_edit(lower: str) -> bool:
         or "категор" in lower
         or "стать" in lower
     )
-    object_like = "транзакц" in lower or "операц" in lower or _has_transaction_pointer(lower)
+    comment_like = (
+        "коммент" in lower
+        or "описан" in lower
+        or "подпись" in lower
+        or "заметк" in lower
+    )
+    object_like = (
+        "транзакц" in lower
+        or "операц" in lower
+        or _has_transaction_pointer(lower)
+        or comment_like
+    )
     return action_like and field_like and object_like
 
 

@@ -228,9 +228,16 @@ def _fallback_transaction_edit_parse(text: str) -> dict:
     if category_match:
         parsed["new_category"] = category_match.group(1).strip(" .,!?:;-")
 
-    comment_match = re.search(r"(?:комментари[йя]|описание|подпись)\s+(.+)$", text or "", re.IGNORECASE)
-    if comment_match:
-        parsed["comment"] = comment_match.group(1).strip()
+    comment_patterns = (
+        r"(?:комментари[йяие]|описание|подпись|заметк[ау])\s+(.+?)\s+(?:замени|поменяй|измени|исправь)\s+(?:на|в)\s+«?(.+?)»?$",
+        r"(?:напиши|поставь|добавь|измени|исправь|замени)\s+(?:в\s+)?(?:комментари[йяие]|описани[еи]|подпис[ьи]|заметк[еу])\s+(?:на|в|как|текстом)?\s*«?(.+?)»?$",
+        r"(?:комментари[йяие]|описание|подпись|заметк[ау])\s+(?:на|в|как|текстом)?\s*«?(.+?)»?$",
+    )
+    for pattern in comment_patterns:
+        comment_match = re.search(pattern, text or "", re.IGNORECASE)
+        if comment_match:
+            parsed["comment"] = comment_match.group(comment_match.lastindex).strip(" .,!?:;«»\"'")
+            break
 
     return parsed
 
@@ -245,6 +252,7 @@ async def parse_transaction_edit(user_id: int, text: str, current: dict) -> dict
         "Верни JSON без пояснений: amount, new_category, comment, day, month, year. "
         "Заполняй только поля, которые пользователь явно просит изменить. "
         "Если поле не меняется, верни null. "
+        "Если пользователь просит изменить комментарий, описание, подпись или заметку к операции, заполни поле comment новым текстом без слова 'на'. "
         "new_category выбери как текст из просьбы пользователя. "
         "Доступные категории: " + ", ".join(category_names) + "\n"
         "Текущая операция: " + json.dumps(current, ensure_ascii=False, default=str)
