@@ -756,6 +756,16 @@ async def cb_cancel_edit_transaction(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text("Ок, не меняю операцию.", reply_markup=main_menu())
 
 
+@router.callback_query(F.data.startswith("confirm_delete_recurring_intent:"))
+async def cb_confirm_delete_recurring_intent(call: CallbackQuery):
+    payment_id = int(call.data.split(":")[1])
+    await execute(
+        "DELETE FROM recurring_payments WHERE id=%s AND user_id=%s",
+        (payment_id, call.from_user.id),
+    )
+    await call.message.edit_text("Платёж удалён из календаря.", reply_markup=main_menu())
+
+
 @router.callback_query(F.data == "settings")
 async def cb_settings(call: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1861,6 +1871,100 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
+    if name == "add_recurring_payment":
+        from app.database import add_recurring_payment, can_use_feature
+        from app.services.recurring_commands import parse_recurring_add
+
+        if not await can_use_feature(message.from_user.id, "calendar"):
+            await message.answer(
+                "Платёжный календарь доступен с тарифа Старт и выше.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        parsed = parse_recurring_add(params.get("text") or text)
+        if not parsed:
+            await message.answer(
+                "Не понял платёж. Напиши, например: «добавь аренду 30000 каждый месяц 5 числа».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        categories = await get_categories(message.from_user.id, type_="expense")
+        cat_id = categories[0]["id"] if categories else None
+        await add_recurring_payment(
+            user_id=message.from_user.id,
+            name=parsed["name"],
+            amount=parsed["amount"],
+            type_="expense",
+            kind="fixed",
+            category_id=cat_id,
+            repeat_type=parsed["repeat_type"],
+            repeat_day_of_month=parsed.get("repeat_day_month"),
+            repeat_day_of_week=parsed.get("repeat_day_week"),
+            remind_days_before=1,
+            amount_is_approximate=parsed.get("is_approx", False),
+        )
+        if parsed["repeat_type"] == "monthly":
+            repeat_text = f"каждый месяц {parsed.get('repeat_day_month') or 1} числа"
+        else:
+            repeat_text = "еженедельно"
+        await message.answer(
+            f"Добавил в платёжный календарь:\n"
+            f"{parsed['name']} — {parsed['amount']:,.0f} ₽, {repeat_text}.\n\n"
+            "Теперь это попадёт в планируемые расходы ДДС.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
+    if name == "delete_recurring_payment":
+        from app.services.recurring_commands import find_recurring_payment
+
+        payment, variants = await find_recurring_payment(message.from_user.id, params.get("text") or text)
+        if not payment:
+            if variants:
+                lines = []
+                for item in variants:
+                    lines.append(f"#{item[0]} {item[2]} — {float(item[3] or 0):,.0f} ₽")
+                await message.answer(
+                    "Нашёл несколько похожих платежей:\n"
+                    + "\n".join(lines)
+                    + "\n\nОткрой календарь и выбери нужный платёж для удаления.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ]),
+                )
+                return True
+            await message.answer(
+                "Не нашёл такой платёж в календаре.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        await message.answer(
+            f"Удалить платёж из календаря?\n\n{payment[2]} — {float(payment[3] or 0):,.0f} ₽",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Да, удалить", callback_data=f"confirm_delete_recurring_intent:{payment[0]}"),
+                    InlineKeyboardButton(text="Отмена", callback_data="calendar"),
+                ],
             ]),
         )
         return True
