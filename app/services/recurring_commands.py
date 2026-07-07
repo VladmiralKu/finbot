@@ -84,6 +84,45 @@ def parse_recurring_add(text: str) -> dict | None:
     }
 
 
+def parse_recurring_edit(text: str) -> dict | None:
+    lower = (text or "").lower()
+    parsed = {
+        "amount": None,
+        "is_approx": None,
+        "repeat_type": None,
+        "repeat_day_month": None,
+        "repeat_day_week": None,
+    }
+
+    amount_match = re.search(
+        r"(?:сумм[ауы]?\s*(?:на)?\s*)?(~?\d[\d\s]*(?:[,.]\d+)?)\s*(?:р|руб|рубл|₽)",
+        lower,
+    )
+    if amount_match:
+        raw_amount = amount_match.group(1)
+        parsed["amount"] = float(raw_amount.replace("~", "").replace(" ", "").replace(",", "."))
+        parsed["is_approx"] = "~" in raw_amount or "примерн" in lower or "около" in lower
+
+    if "каждый месяц" in lower or "ежемесяч" in lower or "раз в месяц" in lower or "числа" in lower:
+        parsed["repeat_type"] = "monthly"
+        day_match = (
+            re.search(r"(?:каждый месяц|ежемесячно|раз в месяц)\s*(?:по\s*)?(\d{1,2})(?:-?го|\s+числа)?", lower)
+            or re.search(r"\b(\d{1,2})(?:-?го|\s+числа)\b", lower)
+        )
+        if day_match:
+            parsed["repeat_day_month"] = max(1, min(28, int(day_match.group(1))))
+    else:
+        for name, weekday in WEEKDAYS.items():
+            if name in lower:
+                parsed["repeat_type"] = "weekly"
+                parsed["repeat_day_week"] = weekday
+                break
+
+    if any(value is not None for value in parsed.values()):
+        return parsed
+    return None
+
+
 async def find_recurring_payment(user_id: int, text: str):
     payments = await get_recurring_payments(user_id)
     if not payments:
@@ -91,10 +130,11 @@ async def find_recurring_payment(user_id: int, text: str):
 
     lower = (text or "").lower()
     query = re.sub(
-        r"\b(удали|удалить|убери|убрать|отмени|отменить|плат[её]ж|регулярн\w*|из\s+календаря)\b",
+        r"\b(удали|удалить|убери|убрать|отмени|отменить|измени|изменить|перенеси|перенести|поменяй|поменять|исправь|исправить|сделай|поставь|сумм[ауы]?|плат[её]ж|регулярн\w*|из\s+календаря|каждый|месяц|ежемесячно|числа|руб|рубл[ьяей]*)\b",
         " ",
         lower,
     )
+    query = re.sub(r"~?\d[\d\s]*(?:[,.]\d+)?", " ", query)
     query = re.sub(r"\s+", " ", query).strip()
 
     scored = []

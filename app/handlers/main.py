@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from app.database import (
     execute, fetchone, fetchall,
@@ -65,6 +65,44 @@ def _looks_like_edit_confusion(text: str) -> bool:
     )
     object_like = "категор" in lower or "стать" in lower or "раздел" in lower
     return action_like and object_like
+
+
+WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def _format_recurring_payment(payment) -> str:
+    amount = float(payment[3] or 0)
+    amount_prefix = "~" if payment[4] else ""
+    repeat_type = payment[8]
+    if repeat_type == "monthly":
+        repeat = f"каждый месяц {payment[9] or 1} числа"
+    elif repeat_type == "weekly":
+        weekday = payment[10] if payment[10] is not None else 0
+        repeat = f"каждую неделю, {WEEKDAYS_SHORT[int(weekday)]}"
+    else:
+        repeat = repeat_type or "без повтора"
+    return f"{payment[2]} — {amount_prefix}{amount:,.0f} ₽, {repeat}"
+
+
+def _next_recurring_date(repeat_type: str, day_month: int | None, day_week: int | None) -> date:
+    today = date.today()
+    if repeat_type == "monthly":
+        day = max(1, min(28, int(day_month or 1)))
+        year = today.year
+        month = today.month
+        if today.day >= day:
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+        return date(year, month, day)
+    if repeat_type == "weekly":
+        weekday = int(day_week if day_week is not None else today.weekday())
+        days_ahead = (weekday - today.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        return today + timedelta(days=days_ahead)
+    return today + timedelta(days=1)
 
 
 async def render_categories_text(user_id: int) -> str:
@@ -764,6 +802,46 @@ async def cb_confirm_delete_recurring_intent(call: CallbackQuery):
         (payment_id, call.from_user.id),
     )
     await call.message.edit_text("Платёж удалён из календаря.", reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "confirm_edit_recurring_intent")
+async def cb_confirm_edit_recurring_intent(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    edit = data.get("pending_recurring_edit")
+    if not edit:
+        await call.message.edit_text("Не нашёл правку для применения.", reply_markup=main_menu())
+        return
+
+    await execute(
+        """
+        UPDATE recurring_payments
+        SET amount=%s,
+            amount_is_approximate=%s,
+            repeat_type=%s,
+            repeat_day_of_month=%s,
+            repeat_day_of_week=%s,
+            next_trigger_date=%s
+        WHERE id=%s AND user_id=%s
+        """,
+        (
+            edit["amount"],
+            edit["amount_is_approximate"],
+            edit["repeat_type"],
+            edit["repeat_day_of_month"],
+            edit["repeat_day_of_week"],
+            edit["next_trigger_date"],
+            edit["payment_id"],
+            call.from_user.id,
+        ),
+    )
+    await state.update_data(pending_recurring_edit=None)
+    await call.message.edit_text("Готово, платёжный календарь обновлён.", reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "cancel_edit_recurring_intent")
+async def cb_cancel_edit_recurring_intent(call: CallbackQuery, state: FSMContext):
+    await state.update_data(pending_recurring_edit=None)
+    await call.message.edit_text("Ок, календарь не меняю.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "settings")
@@ -1965,6 +2043,99 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                     InlineKeyboardButton(text="Да, удалить", callback_data=f"confirm_delete_recurring_intent:{payment[0]}"),
                     InlineKeyboardButton(text="Отмена", callback_data="calendar"),
                 ],
+            ]),
+        )
+        return True
+
+    if name == "edit_recurring_payment":
+        from app.database import can_use_feature
+        from app.services.recurring_commands import find_recurring_payment, parse_recurring_edit
+
+        if not await can_use_feature(message.from_user.id, "calendar"):
+            await message.answer(
+                "Платёжный календарь доступен с тарифа Старт и выше.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        raw_text = params.get("text") or text
+        payment, variants = await find_recurring_payment(message.from_user.id, raw_text)
+        if not payment:
+            if variants:
+                lines = [f"#{item[0]} {item[2]} — {float(item[3] or 0):,.0f} ₽" for item in variants]
+                await message.answer(
+                    "Нашёл несколько похожих платежей:\n"
+                    + "\n".join(lines)
+                    + "\n\nОткрой календарь и выбери нужный платёж.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                        [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                    ]),
+                )
+                return True
+            await message.answer(
+                "Не нашёл такой платёж в календаре. Можно открыть календарь и выбрать его вручную.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        parsed = parse_recurring_edit(raw_text)
+        if not parsed:
+            await message.answer(
+                "Понял платёж, но не понял, что поменять. Например: "
+                "«перенеси аренду на 10 число» или «измени кредит на 25000 рублей».",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        repeat_type = parsed.get("repeat_type") or payment[8]
+        repeat_day_month = payment[9] if repeat_type == "monthly" else None
+        repeat_day_week = payment[10] if repeat_type == "weekly" else None
+        if parsed.get("repeat_day_month") is not None:
+            repeat_day_month = parsed["repeat_day_month"]
+            repeat_day_week = None
+        if parsed.get("repeat_day_week") is not None:
+            repeat_day_week = parsed["repeat_day_week"]
+            repeat_day_month = None
+
+        edit = {
+            "payment_id": payment[0],
+            "amount": parsed["amount"] if parsed.get("amount") is not None else float(payment[3] or 0),
+            "amount_is_approximate": (
+                parsed["is_approx"] if parsed.get("is_approx") is not None else bool(payment[4])
+            ),
+            "repeat_type": repeat_type,
+            "repeat_day_of_month": repeat_day_month,
+            "repeat_day_of_week": repeat_day_week,
+            "next_trigger_date": _next_recurring_date(repeat_type, repeat_day_month, repeat_day_week),
+        }
+        updated_payment = list(payment)
+        updated_payment[3] = edit["amount"]
+        updated_payment[4] = edit["amount_is_approximate"]
+        updated_payment[8] = edit["repeat_type"]
+        updated_payment[9] = edit["repeat_day_of_month"]
+        updated_payment[10] = edit["repeat_day_of_week"]
+
+        await state.update_data(pending_recurring_edit=edit)
+        await message.answer(
+            "Изменить платёж в календаре?\n\n"
+            f"Было: {_format_recurring_payment(payment)}\n"
+            f"Будет: {_format_recurring_payment(updated_payment)}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Да, изменить", callback_data="confirm_edit_recurring_intent"),
+                    InlineKeyboardButton(text="Отмена", callback_data="cancel_edit_recurring_intent"),
+                ],
+                [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
             ]),
         )
         return True

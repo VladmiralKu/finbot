@@ -158,6 +158,39 @@ def _looks_like_delete_recurring(lower: str) -> bool:
     return delete_like and recurring_like
 
 
+def _looks_like_edit_recurring(lower: str) -> bool:
+    edit_like = (
+        "измени" in lower
+        or "изменить" in lower
+        or "перенеси" in lower
+        or "перенести" in lower
+        or "поменяй" in lower
+        or "поменять" in lower
+        or "исправь" in lower
+        or "исправить" in lower
+        or "сделай" in lower
+        or "поставь" in lower
+    )
+    recurring_like = (
+        "платеж" in lower
+        or "платёж" in lower
+        or "календар" in lower
+        or "регуляр" in lower
+        or "подписк" in lower
+    )
+    field_like = (
+        "сумм" in lower
+        or "руб" in lower
+        or "₽" in lower
+        or "числа" in lower
+        or "каждый месяц" in lower
+        or "ежемесяч" in lower
+        or "раз в месяц" in lower
+        or any(day in lower for day in ("понедельник", "вторник", "сред", "четверг", "пятниц", "суббот", "воскрес"))
+    )
+    return edit_like and (recurring_like or field_like)
+
+
 async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
     lower = (text or "").lower().strip()
 
@@ -202,6 +235,14 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
     if _looks_like_delete_recurring(lower):
         return {
             "intent": "delete_recurring_payment",
+            "confidence": 0.9,
+            "params": {"text": text},
+            "needs_confirmation": True,
+        }
+
+    if _looks_like_edit_recurring(lower):
+        return {
+            "intent": "edit_recurring_payment",
             "confidence": 0.9,
             "params": {"text": text},
             "needs_confirmation": True,
