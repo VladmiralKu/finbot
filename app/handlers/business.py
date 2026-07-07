@@ -105,7 +105,14 @@ async def cb_notes_menu(call: CallbackQuery):
         [InlineKeyboardButton(text="Старые заметки", callback_data="notes_list:0")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
-    await call.message.edit_text("Заметки:", parse_mode=None, reply_markup=kb)
+    await call.message.edit_text(
+        "📝 <b>Заметки</b>\n\n"
+        "Это место для важной информации, которая не является транзакцией: договорённости, планы, долги, идеи, цели, детали бизнеса.\n\n"
+        "Важно: <b>ИИ-помощник видит заметки</b> и может использовать их как базу данных для отчётов, выводов, планов и финансового анализа.\n\n"
+        "Можно написать текстом или надиктовать голосом.",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
 
 
 @router.callback_query(F.data == "note_add")
