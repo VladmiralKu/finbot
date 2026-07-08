@@ -6,6 +6,7 @@ from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from datetime import date, datetime, timedelta
+import asyncio
 from html import escape
 
 from app.database import (
@@ -891,28 +892,20 @@ async def cb_settings(call: CallbackQuery):
     )
 
 
-@router.callback_query(F.data.startswith("kie_report:"))
-async def cb_kie_report_ready(call: CallbackQuery):
+async def _send_beautiful_report_result(bot, chat_id: int, task_id: str) -> bool:
     from app.services.kie_reports import extract_result_url, get_kie_task
 
-    task_id = call.data.split(":", 1)[1]
-    await call.answer("Проверяю отчёт...")
     try:
         task = await get_kie_task(task_id)
-    except Exception as e:
-        await call.message.answer(
-            "Не смог проверить красивый отчёт: " + str(e),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-            ]),
-        )
-        return
+    except Exception:
+        return False
 
     state = task.get("state") or "unknown"
     if state == "success":
         image_url = extract_result_url(task)
         if image_url:
-            await call.message.answer_photo(
+            await bot.send_photo(
+                chat_id,
                 image_url,
                 caption="Готово! Красивый отчёт собран.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -920,32 +913,55 @@ async def cb_kie_report_ready(call: CallbackQuery):
                 ]),
             )
         else:
-            await call.message.answer(
-                "Отчёт завершён, но Kie.ai не вернул ссылку на картинку.",
+            await bot.send_message(
+                chat_id,
+                "Отчёт собрался, но я не смог получить картинку. Попробуй запросить отчёт ещё раз чуть позже.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
             )
-        return
+        return True
 
     if state == "fail":
-        await call.message.answer(
-            "Kie.ai не смог собрать отчёт: " + (task.get("failMsg") or "без подробностей"),
+        await bot.send_message(
+            chat_id,
+            "Не получилось собрать красивый отчёт. Попробуй ещё раз чуть позже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ]),
         )
-        return
+        return True
 
-    progress = task.get("progress")
-    progress_text = "" if progress is None else " Прогресс: " + str(progress) + "%"
-    await call.message.answer(
-        "Отчёт ещё готовится." + progress_text + "\n\nПопробуй проверить ещё раз чуть позже.",
+    return False
+
+
+async def _wait_and_send_beautiful_report(bot, chat_id: int, task_id: str):
+    for _ in range(36):
+        await asyncio.sleep(10)
+        if await _send_beautiful_report_result(bot, chat_id, task_id):
+            return
+
+    await bot.send_message(
+        chat_id,
+        "Отчёт всё ещё готовится. Я пока не получил картинку, но можно запросить красивый отчёт ещё раз чуть позже.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Проверить ещё раз", callback_data="kie_report:" + task_id)],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),
     )
+
+
+@router.callback_query(F.data.startswith("kie_report:"))
+async def cb_kie_report_ready(call: CallbackQuery):
+    task_id = call.data.split(":", 1)[1]
+    await call.answer("Проверяю отчёт...")
+    if not await _send_beautiful_report_result(call.bot, call.message.chat.id, task_id):
+        await call.message.answer(
+            "Отчёт ещё готовится. Я пришлю картинку сюда, когда она будет готова.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        asyncio.create_task(_wait_and_send_beautiful_report(call.bot, call.message.chat.id, task_id))
 
 
 # --- Быстрый ввод ---
@@ -2030,18 +2046,19 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                 int(params["month"]),
             )
             await thinking.edit_text(
-                "Запустил генерацию красивого отчёта.\n\n"
-                "Kie.ai принял задачу: " + result["task_id"] + "\n\n"
-                "Генерация обычно занимает немного времени. Нажми «Проверить готовность» через минуту.",
+                "Принял. Собираю красивый отчёт и пришлю картинку сюда, когда она будет готова.
+
+"
+                "Обычно это занимает около минуты.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Проверить готовность", callback_data="kie_report:" + result["task_id"])],
                     [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
             )
+            asyncio.create_task(_wait_and_send_beautiful_report(message.bot, message.chat.id, result["task_id"]))
         except Exception as e:
             await thinking.edit_text(
-                "Не смог запустить красивый отчёт: " + str(e),
+                "Не смог запустить красивый отчёт. Проверь настройки генерации отчётов или попробуй позже.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
