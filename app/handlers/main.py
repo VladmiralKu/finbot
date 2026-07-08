@@ -6,6 +6,7 @@ from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from datetime import date, datetime, timedelta
+from html import escape
 
 from app.database import (
     execute, fetchone, fetchall,
@@ -50,6 +51,23 @@ NO_SPEND_REPLIES = {
 def _is_no_spend_reply(text: str) -> bool:
     normalized = " ".join((text or "").lower().strip().split())
     return normalized in NO_SPEND_REPLIES
+
+
+def _format_comment_inline(comment: str | None) -> str:
+    value = (comment or "").strip()
+    return f" | 💬 «{value}»" if value else ""
+
+
+def _format_comment_block(comment: str | None) -> str:
+    value = (comment or "").strip()
+    return f"💬 Комментарий: «{value}»" if value else "💬 Комментарий: —"
+
+
+def _format_comment_block_html(comment: str | None) -> str:
+    value = (comment or "").strip()
+    if not value:
+        return "💬 <b>Комментарий:</b> —"
+    return f"💬 <b>Комментарий:</b> <i>«{escape(value)}»</i>"
 
 
 def _looks_like_edit_confusion(text: str) -> bool:
@@ -437,7 +455,7 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
     text = (
         f"✅ Записано!\n\n"
         f"{sign}{data['amount']:,.0f} ₽  •  {kind_label}\n"
-        f"💬 {comment or '—'}"
+        f"{_format_comment_block(comment)}"
     )
     insight = await build_transaction_insight(message.from_user.id, tx["id"])
     if insight:
@@ -705,7 +723,7 @@ def _tx_row_to_current(tx) -> dict:
 def _format_current_tx(current: dict) -> str:
     sign = "-" if current["type"] == "expense" else "+"
     date_value = current["transaction_date"].strftime("%d.%m")
-    comment = f" | {current['comment']}" if current.get("comment") else ""
+    comment = _format_comment_inline(current.get("comment"))
     return f"{date_value} {sign}{abs(float(current['amount'])):,.0f} {current.get('category_name') or ''}{comment}"
 
 
@@ -905,13 +923,13 @@ async def msg_quick_input(message: Message, state: FSMContext):
     text = (
         f"✅ <b>Записано!</b>\n\n"
         f"{sign}{tx['amount']:,.0f} ₽\n"
-        f"📂 {tx['category_name']}\n"
+        f"📂 {escape(str(tx['category_name']))}\n"
         f"📅 {date_str}\n"
     )
     if tx.get("comment"):
-        text += f"💬 {tx['comment']}\n"
+        text += _format_comment_block_html(tx["comment"]) + "\n"
     if tx.get("pnl_period"):
-        text += f"📊 ПнЛ: {tx['pnl_period']}\n"
+        text += f"📊 ПнЛ: {escape(str(tx['pnl_period']))}\n"
 
     insight = await build_transaction_insight(message.from_user.id, saved["id"])
     if insight:
@@ -1111,7 +1129,7 @@ async def cb_txlist(call: CallbackQuery):
     for tx in page:
         tx_id, date, amount, type_, comment, cat_name, wallet = tx
         sign = "-" if type_ == "expense" else "+"
-        comment_str = f" | {comment}" if comment else ""
+        comment_str = _format_comment_inline(comment)
         line = f"#{tx_id} {date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {cat_name or ''}{comment_str}\n"
         if len(text) + len(line) > 3500:
             break
@@ -1365,7 +1383,7 @@ async def msg_edit_tx_value(message: Message, state: FSMContext):
 
 @router.message(EditTxState.waiting_value, F.voice)
 async def msg_edit_tx_voice(message: Message, state: FSMContext):
-    from app.handlers.voice import transcribe_voice
+    from app.handlers.voice import format_recognized_text, transcribe_voice
 
     thinking = await message.answer("Распознаю голос...")
     try:
@@ -1382,7 +1400,7 @@ async def msg_edit_tx_voice(message: Message, state: FSMContext):
         await message.answer("Не удалось распознать голос. Попробуй ещё раз.")
         return
 
-    await message.answer("Распознано: " + text)
+    await message.answer(format_recognized_text(text), parse_mode="HTML")
     await _apply_edit_tx_text(message, state, text)
 
 
@@ -1434,7 +1452,7 @@ async def msg_delete_tx_by_id(message: Message, state: FSMContext):
 
 @router.message(DeleteTxState.waiting_id, F.voice)
 async def msg_delete_tx_by_voice(message: Message, state: FSMContext):
-    from app.handlers.voice import transcribe_voice
+    from app.handlers.voice import format_recognized_text, transcribe_voice
 
     thinking = await message.answer("Распознаю голос...")
     try:
@@ -1451,7 +1469,7 @@ async def msg_delete_tx_by_voice(message: Message, state: FSMContext):
         await message.answer("Не удалось распознать голос. Попробуй ещё раз.")
         return
 
-    await message.answer("Распознано: " + text)
+    await message.answer(format_recognized_text(text), parse_mode="HTML")
     if text.strip().replace("#", "").isdigit():
         await state.clear()
         from app.database import delete_transaction_by_id
@@ -1867,7 +1885,7 @@ async def answer_help_question(user_text: str, bot_answer_func=None):
 def _format_tx_preview(tx) -> str:
     tx_id, tx_date, amount, type_, comment, category = tx
     sign = "-" if type_ == "expense" else "+"
-    comment_part = f" {comment}" if comment else ""
+    comment_part = _format_comment_inline(comment)
     return f"#{tx_id} {tx_date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {category or ''}{comment_part}"
 
 
@@ -1876,7 +1894,7 @@ def _format_recent_tx_lines(txs, limit: int = 8) -> str:
     for tx in txs[:limit]:
         sign = "-" if tx["type"] == "expense" else "+"
         date_value = tx["transaction_date"].strftime("%d.%m")
-        comment = f" | {tx['comment']}" if tx.get("comment") else ""
+        comment = _format_comment_inline(tx.get("comment"))
         lines.append(
             f"#{tx['id']} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
             f"{tx.get('category_name') or ''}{comment}"
@@ -1946,7 +1964,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         for tx in txs:
             sign = "-" if tx["type"] == "expense" else "+"
             date_value = tx["transaction_date"].strftime("%d.%m")
-            comment = f" | {tx['comment']}" if tx.get("comment") else ""
+            comment = _format_comment_inline(tx.get("comment"))
             lines.append(
                 f"#{tx['id']} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
                 f"{tx.get('category_name') or ''}{comment}"
@@ -2355,7 +2373,10 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             )
             saved_ids.append(saved["id"])
             sign = "-" if tx["type"] == "expense" else "+"
-            added.append(f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{saved['id']}")
+            added.append(
+                f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{saved['id']}"
+                + _format_comment_inline(tx.get("comment"))
+            )
 
         if added:
             response_text = "Записано:\n" + "\n".join(added)

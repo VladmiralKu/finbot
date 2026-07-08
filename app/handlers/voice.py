@@ -1,10 +1,20 @@
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from html import escape
 import httpx
 import os
 
 router = Router()
+
+
+def format_recognized_text(text: str) -> str:
+    return "Распознано:\n<blockquote>" + escape(text or "") + "</blockquote>"
+
+
+def _format_comment_inline(comment: str | None) -> str:
+    value = (comment or "").strip()
+    return f" | 💬 «{value}»" if value else ""
 
 
 async def transcribe_voice(audio_bytes: bytes) -> str:
@@ -120,7 +130,7 @@ async def msg_voice(message: Message, state: FSMContext):
             return
 
         await thinking.delete()
-        await message.answer("Распознано: " + text)
+        await message.answer(format_recognized_text(text), parse_mode="HTML")
 
         text_lower = text.lower().strip()
         command_like = (
@@ -172,7 +182,10 @@ async def msg_voice(message: Message, state: FSMContext):
             )
             saved_ids.append(saved["id"])
             sign = "-" if type_ == 'expense' else "+"
-            added.append(sign + str(int(amount)) + " руб. — " + tx["category_name"] + hint_currency + f" #{saved['id']}")
+            added.append(
+                sign + str(int(amount)) + " руб. — " + tx["category_name"] + hint_currency + f" #{saved['id']}"
+                + _format_comment_inline(tx.get("comment"))
+            )
 
         if added:
             if current_state:

@@ -30,6 +30,48 @@ def _clean_name(value: str) -> str:
     return value[:1].upper() + value[1:] if value else value
 
 
+RECURRING_SEARCH_STOP_WORDS = {
+    "удали", "удалить", "убери", "убрать", "отмени", "отменить",
+    "измени", "изменить", "перенеси", "перенести", "поменяй", "поменять",
+    "исправь", "исправить", "сделай", "поставь", "платеж", "платежа",
+    "платежи", "платежей", "платежом", "платёж", "платёжа", "платёжи",
+    "регулярный", "регулярного", "регулярные", "регулярных", "календарь",
+    "календаря", "сумма", "сумму", "суммы", "на", "в", "во", "из", "с",
+    "со", "по", "для", "у", "и", "или", "от", "до", "каждый", "каждую",
+    "каждое", "каждые", "месяц", "месяца", "месяцу", "ежемесячно",
+    "раз", "неделю", "неделя", "число", "числа", "руб", "рублей",
+    "рубля", "рубль", "примерно", "около",
+    *WEEKDAYS.keys(),
+}
+
+
+def _stem_word(word: str) -> str:
+    word = re.sub(r"[^а-яёa-z0-9]+", "", (word or "").lower().replace("ё", "е"))
+    suffixes = (
+        "иями", "ями", "ами", "ого", "ему", "ыми", "ими", "ую", "юю",
+        "ая", "яя", "ое", "ее", "ые", "ие", "ом", "ем", "ах", "ях",
+        "ой", "ей", "ов", "ев", "ам", "ям", "а", "у", "ы", "и", "е",
+        "о", "й", "ь",
+    )
+    for suffix in suffixes:
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[:-len(suffix)]
+    return word
+
+
+def _recurring_search_terms(text: str) -> list[str]:
+    lower = (text or "").lower().replace("ё", "е")
+    lower = re.sub(r"~?\d[\d\s]*(?:[,.]\d+)?\s*(?:рублей|рубля|рубль|рубл|руб|р|₽)?", " ", lower)
+    terms = []
+    for word in re.findall(r"[а-яёa-z0-9]+", lower):
+        if word in RECURRING_SEARCH_STOP_WORDS or word.isdigit():
+            continue
+        stem = _stem_word(word)
+        if stem and stem not in RECURRING_SEARCH_STOP_WORDS and stem not in terms:
+            terms.append(stem)
+    return terms
+
+
 def parse_recurring_add(text: str) -> dict | None:
     lower = (text or "").lower()
     amount_match = re.search(r"(~?\d[\d\s]*(?:[,.]\d+)?)\s*(?:р|руб|рубл|₽)?", lower)
@@ -46,8 +88,8 @@ def parse_recurring_add(text: str) -> dict | None:
     if "каждый месяц" in lower or "ежемесяч" in lower or "раз в месяц" in lower:
         repeat_type = "monthly"
         day_match = (
-            re.search(r"(?:каждый месяц|ежемесячно|раз в месяц)\s*(?:по\s*)?(\d{1,2})(?:-?го|\s+числа)?", lower)
-            or re.search(r"\b(\d{1,2})(?:-?го|\s+числа)\b", lower)
+            re.search(r"(?:каждый месяц|ежемесячно|раз в месяц)\s*(?:по\s*)?(\d{1,2})(?:-?го|\s+числ[ао])?", lower)
+            or re.search(r"\b(\d{1,2})(?:-?го|\s+числ[ао])\b", lower)
         )
         if day_match:
             day_month = max(1, min(28, int(day_match.group(1))))
@@ -103,11 +145,11 @@ def parse_recurring_edit(text: str) -> dict | None:
         parsed["amount"] = float(raw_amount.replace("~", "").replace(" ", "").replace(",", "."))
         parsed["is_approx"] = "~" in raw_amount or "примерн" in lower or "около" in lower
 
-    if "каждый месяц" in lower or "ежемесяч" in lower or "раз в месяц" in lower or "числа" in lower:
+    if "каждый месяц" in lower or "ежемесяч" in lower or "раз в месяц" in lower or "числа" in lower or "число" in lower:
         parsed["repeat_type"] = "monthly"
         day_match = (
-            re.search(r"(?:каждый месяц|ежемесячно|раз в месяц)\s*(?:по\s*)?(\d{1,2})(?:-?го|\s+числа)?", lower)
-            or re.search(r"\b(\d{1,2})(?:-?го|\s+числа)\b", lower)
+            re.search(r"(?:каждый месяц|ежемесячно|раз в месяц)\s*(?:по\s*)?(\d{1,2})(?:-?го|\s+числ[ао])?", lower)
+            or re.search(r"\b(\d{1,2})(?:-?го|\s+числ[ао])\b", lower)
         )
         if day_match:
             parsed["repeat_day_month"] = max(1, min(28, int(day_match.group(1))))
@@ -128,26 +170,26 @@ async def find_recurring_payment(user_id: int, text: str):
     if not payments:
         return None, []
 
-    lower = (text or "").lower()
-    query = re.sub(
-        r"\b(удали|удалить|убери|убрать|отмени|отменить|измени|изменить|перенеси|перенести|поменяй|поменять|исправь|исправить|сделай|поставь|сумм[ауы]?|плат[её]ж|регулярн\w*|из\s+календаря|каждый|месяц|ежемесячно|числа|руб|рубл[ьяей]*)\b",
-        " ",
-        lower,
-    )
-    query = re.sub(r"~?\d[\d\s]*(?:[,.]\d+)?", " ", query)
-    query = re.sub(r"\s+", " ", query).strip()
+    query_terms = _recurring_search_terms(text)
+    query = " ".join(query_terms)
 
     scored = []
     for payment in payments:
         name = str(payment[2] or "")
-        name_lower = name.lower()
-        if query and (query in name_lower or name_lower in query):
+        name_terms = _recurring_search_terms(name)
+        name_query = " ".join(name_terms)
+        if query and name_query and (query in name_query or name_query in query):
             score = 1.0
+        elif query_terms and name_terms:
+            common = set(query_terms) & set(name_terms)
+            overlap = len(common) / max(1, min(len(query_terms), len(name_terms)))
+            ratio = difflib.SequenceMatcher(None, query, name_query).ratio()
+            score = max(overlap, ratio)
         else:
-            score = difflib.SequenceMatcher(None, query, name_lower).ratio() if query else 0.0
+            score = difflib.SequenceMatcher(None, query, name.lower()).ratio() if query else 0.0
         scored.append((score, payment))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    if scored and scored[0][0] >= 0.72:
+    if scored and scored[0][0] >= 0.62:
         return scored[0][1], []
     return None, [payment for _, payment in scored[:5]]

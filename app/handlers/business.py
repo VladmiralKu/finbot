@@ -29,6 +29,22 @@ async def _save_note(user_id: int, text: str):
     )
 
 
+NOTES_ORDER_SQL = "ORDER BY created_at DESC, id DESC"
+
+
+async def _get_note_by_public_number(user_id: int, note_number: int):
+    from app.database import fetchone
+
+    if note_number < 1:
+        return None
+    return await fetchone(
+        "SELECT id, created_at, text FROM notes WHERE user_id=%s "
+        + NOTES_ORDER_SQL
+        + " LIMIT 1 OFFSET %s",
+        (user_id, note_number - 1),
+    )
+
+
 def business_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Табло управленца", callback_data="dash_menu")],
@@ -180,13 +196,15 @@ async def cb_notes_list(call: CallbackQuery):
     limit = 5
 
     rows = await fetchall(
-        "SELECT id, created_at, text FROM notes WHERE user_id=%s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+        "SELECT id, created_at, text FROM notes WHERE user_id=%s "
+        + NOTES_ORDER_SQL
+        + " LIMIT %s OFFSET %s",
         (call.from_user.id, limit + 1, offset)
     )
 
     if not rows:
         await call.message.edit_text(
-            "Zametok poka net.",
+            "Заметок пока нет.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
             ])
@@ -197,11 +215,11 @@ async def cb_notes_list(call: CallbackQuery):
     rows = rows[:limit]
 
     text = "Заметки:\n\n"
-    for row in rows:
+    for index, row in enumerate(rows, start=offset + 1):
         note_id, created_at, note_text = row
         date_str = created_at.strftime("%d.%m.%Y %H:%M")
         preview = note_text[:80] + "..." if len(note_text) > 80 else note_text
-        text += "#" + str(note_id) + " [" + date_str + "]\n" + preview + "\n\n"
+        text += "#" + str(index) + " [" + date_str + "]\n" + preview + "\n\n"
 
     buttons = []
     if offset > 0:
@@ -226,7 +244,7 @@ class NoteSearchState(StatesGroup):
 async def cb_note_search(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteSearchState.waiting_id)
     await call.message.edit_text(
-        "Введи номер заметки (например: 42):",
+        "Введи номер заметки из списка (например: 1):",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
@@ -236,22 +254,18 @@ async def cb_note_search(call: CallbackQuery, state: FSMContext):
 
 @router.message(NoteSearchState.waiting_id)
 async def msg_note_search(message: Message, state: FSMContext):
-    from app.database import fetchone
     await state.clear()
     try:
-        note_id = int(message.text.strip().replace("#", ""))
+        note_number = int(message.text.strip().replace("#", ""))
     except ValueError:
         await message.answer("Введи числовой номер заметки.")
         return
 
-    row = await fetchone(
-        "SELECT id, created_at, text FROM notes WHERE id=%s AND user_id=%s",
-        (note_id, message.from_user.id)
-    )
+    row = await _get_note_by_public_number(message.from_user.id, note_number)
 
     if not row:
         await message.answer(
-            "Zametka #" + str(note_id) + " ne naydena.",
+            "Заметка #" + str(note_number) + " не найдена.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")]
             ])
@@ -261,10 +275,10 @@ async def msg_note_search(message: Message, state: FSMContext):
     note_id, created_at, text = row
     date_str = created_at.strftime("%d.%m.%Y %H:%M")
     await message.answer(
-        "#" + str(note_id) + " [" + date_str + "]\n\n" + text,
+        "#" + str(note_number) + " [" + date_str + "]\n\n" + text,
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Удалить заметку", callback_data=f"note_delete_confirm:{note_id}")],
+            [InlineKeyboardButton(text="Удалить заметку", callback_data=f"note_delete_confirm:{note_number}:{note_id}")],
             [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ])
@@ -275,7 +289,7 @@ async def msg_note_search(message: Message, state: FSMContext):
 async def cb_note_delete(call: CallbackQuery, state: FSMContext):
     await state.set_state(NoteDeleteState.waiting_id)
     await call.message.answer(
-        "Введи номер заметки для удаления, например: 42.",
+        "Введи номер заметки из списка для удаления, например: 1.",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="notes_menu")]
@@ -287,11 +301,11 @@ async def cb_note_delete(call: CallbackQuery, state: FSMContext):
 async def msg_note_delete(message: Message, state: FSMContext):
     await state.clear()
     try:
-        note_id = int((message.text or "").strip().replace("#", ""))
+        note_number = int((message.text or "").strip().replace("#", ""))
     except ValueError:
         await message.answer("Введи числовой номер заметки.")
         return
-    await _delete_note(message.from_user.id, note_id, message)
+    await _delete_note_by_public_number(message.from_user.id, note_number, message)
 
 
 @router.message(NoteDeleteState.waiting_id, F.voice)
@@ -315,22 +329,41 @@ async def msg_note_delete_voice(message: Message, state: FSMContext):
     if not match:
         await message.answer("Не услышал номер заметки. Введи номер текстом.")
         return
-    await _delete_note(message.from_user.id, int(match.group(0)), message)
+    await _delete_note_by_public_number(message.from_user.id, int(match.group(0)), message)
 
 
 @router.callback_query(F.data.startswith("note_delete_confirm:"))
 async def cb_note_delete_confirm(call: CallbackQuery):
-    note_id = int(call.data.split(":")[1])
-    await _delete_note(call.from_user.id, note_id, call.message, edit=True)
+    parts = call.data.split(":")
+    note_number = int(parts[1])
+    note_id = int(parts[2])
+    await _delete_note_by_id(call.from_user.id, note_id, note_number, call.message, edit=True)
 
 
-async def _delete_note(user_id: int, note_id: int, target, edit: bool = False):
+async def _delete_note_by_public_number(user_id: int, note_number: int, target, edit: bool = False):
+    row = await _get_note_by_public_number(user_id, note_number)
+    if not row:
+        await _send_note_delete_result(
+            target,
+            f"Заметка #{note_number} не найдена.",
+            edit=edit,
+        )
+        return
+    await _delete_note_by_id(user_id, row[0], note_number, target, edit=edit)
+
+
+async def _delete_note_by_id(user_id: int, note_id: int, note_number: int, target, edit: bool = False):
     from app.database import execute
+
     row_count = await execute(
         "DELETE FROM notes WHERE id=%s AND user_id=%s",
         (note_id, user_id),
     )
-    text = f"Заметка #{note_id} удалена." if row_count else f"Заметка #{note_id} не найдена."
+    text = f"Заметка #{note_number} удалена." if row_count else f"Заметка #{note_number} не найдена."
+    await _send_note_delete_result(target, text, edit=edit)
+
+
+async def _send_note_delete_result(target, text: str, edit: bool = False):
     reply_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Заметки", callback_data="notes_menu")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],

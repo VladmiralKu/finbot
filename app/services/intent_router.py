@@ -159,6 +159,17 @@ def _looks_like_delete_recurring(lower: str) -> bool:
 
 
 def _looks_like_edit_recurring(lower: str) -> bool:
+    transaction_specific = (
+        "транзакц" in lower
+        or "операц" in lower
+        or "коммент" in lower
+        or "описан" in lower
+        or "категор" in lower
+        or "стать" in lower
+    )
+    if transaction_specific:
+        return False
+
     edit_like = (
         "измени" in lower
         or "изменить" in lower
