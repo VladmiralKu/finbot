@@ -2044,6 +2044,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                 message.from_user.id,
                 int(params["year"]),
                 int(params["month"]),
+                params.get("user_prompt") or text,
             )
             await thinking.edit_text(
                 "Принял. Собираю красивый отчёт и пришлю картинку сюда, когда она будет готова.\n\n"

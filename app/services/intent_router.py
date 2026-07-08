@@ -135,15 +135,53 @@ def _looks_like_transaction_edit(lower: str) -> bool:
 
 def _looks_like_beautiful_report(lower: str) -> bool:
     report_like = "отчет" in lower or "отчёт" in lower
-    beautiful_like = (
+    visual_like = (
         "красив" in lower
+        or "график" in lower
+        or "диаграм" in lower
         or "картин" in lower
         or "изображ" in lower
         or "инфограф" in lower
         or "визуаль" in lower
         or "pdf" in lower
+        or "в виде" in lower
     )
-    return report_like and beautiful_like
+    finance_like = (
+        "финанс" in lower
+        or "баланс" in lower
+        or "доход" in lower
+        or "расход" in lower
+        or "трат" in lower
+        or "закуп" in lower
+        or "зарплат" in lower
+        or "выруч" in lower
+        or "поступлен" in lower
+        or "платеж" in lower
+        or "платёж" in lower
+        or "категор" in lower
+        or "операц" in lower
+        or "транзакц" in lower
+        or "еда" in lower
+    )
+    analysis_like = (
+        "соотношен" in lower
+        or "сравн" in lower
+        or "динамик" in lower
+        or "пики" in lower
+        or "пик " in lower
+        or "лучших дней" in lower
+        or "топ" in lower
+        or "структур" in lower
+    )
+    custom_like = "без " in lower or "только" in lower or "убери" in lower or "добавь" in lower
+    date_range_like = bool(re.search(r"\bс\s+\d{1,2}[\s./-].+\b(?:по|до)\b\s+\d{1,2}", lower))
+    action_like = "сделай" in lower or "построй" in lower or "нарис" in lower or "собери" in lower
+    if report_like:
+        return visual_like or analysis_like or custom_like
+    return (
+        (finance_like and (visual_like or analysis_like))
+        or (action_like and (date_range_like or analysis_like))
+    )
 
 
 def _looks_like_add_recurring(lower: str) -> bool:
@@ -226,6 +264,20 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "needs_confirmation": False,
         }
 
+    if _looks_like_beautiful_report(lower):
+        period = _month_from_text(lower)
+        if period:
+            year, month = period
+        else:
+            today = date.today()
+            year, month = today.year, today.month
+        return {
+            "intent": "beautiful_report",
+            "confidence": 0.9,
+            "params": {"year": year, "month": month, "user_prompt": text},
+            "needs_confirmation": False,
+        }
+
     if "отчет" in lower or "отчёт" in lower:
         period = _month_from_text(lower)
         if period:
@@ -233,13 +285,6 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
         else:
             today = date.today()
             year, month = today.year, today.month
-        if _looks_like_beautiful_report(lower):
-            return {
-                "intent": "beautiful_report",
-                "confidence": 0.9,
-                "params": {"year": year, "month": month},
-                "needs_confirmation": False,
-            }
         return {
             "intent": "show_report",
             "confidence": 0.9,
