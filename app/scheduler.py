@@ -2,6 +2,7 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.database import execute, fetchall, fetchone, get_todays_reminders, touch_reminder_sent
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from html import escape
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def _top_lines(stats: dict) -> str:
     if not stats["top"]:
         return "Пока мало данных по категориям."
     return "\n".join(
-        f"• {name or 'Без категории'} — {_rub(total)}"
+        f"• {escape(str(name or 'Без категории'))} — {_rub(total)}"
         for name, total in stats["top"]
     )
 
@@ -100,44 +101,45 @@ def _top_lines(stats: dict) -> str:
 def _trial_message(day: int, stats: dict) -> str:
     if stats["count"] == 0:
         return (
-            "Привет! Сегодня важная точка пробного периода.\n\n"
-            "Пока у меня мало данных, чтобы увидеть закономерности. Запиши несколько трат и доходов текстом или голосом, "
-            "и я начну показывать, куда уходят деньги."
+            "🌱 <b>День " + str(day) + " пробного периода</b>\n\n"
+            "<blockquote>Финансовая ясность начинается не с идеальной таблицы, а с пары честных записей.</blockquote>\n\n"
+            "Пока у меня мало данных, чтобы увидеть закономерности. Запиши несколько трат или доходов текстом/голосом — "
+            "и я начну собирать для тебя понятную картину."
         )
 
     balance = stats["income"] - stats["expense"]
     if day == 3:
         return (
-            "День 3: первые выводы по деньгам\n\n"
-            f"Я уже вижу {stats['count']} операций.\n"
-            f"Доходы: {_rub(stats['income'])}\n"
-            f"Расходы: {_rub(stats['expense'])}\n"
-            f"Баланс: {_rub(balance)}\n\n"
-            "Больше всего сейчас уходит сюда:\n"
+            "✨ <b>День 3: уже видна первая картина</b>\n\n"
+            "<blockquote>Деньги любят ясность, а не напряжение.</blockquote>\n\n"
+            f"Я уже вижу <b>{stats['count']}</b> операций.\n"
+            f"💰 Доходы: <b>{_rub(stats['income'])}</b>\n"
+            f"💸 Расходы: <b>{_rub(stats['expense'])}</b>\n"
+            f"⚖️ Баланс: <b>{_rub(balance)}</b>\n\n"
+            "🔎 Больше всего сейчас уходит сюда:\n"
             + _top_lines(stats)
-            + "\n\nПродолжай записывать операции: к 7-му дню соберём основу планового бюджета."
+            + "\n\nПродолжай просто записывать операции. Через несколько дней я смогу собрать уже более цельный бюджет и подсветить закономерности."
         )
     if day == 7:
-        variable = max(stats["expense"] - stats["fixed"], 0)
         daily_avg = stats["expense"] / 7
         monthly_forecast = daily_avg * 30
         return (
-            "День 7: пора собирать плановый бюджет\n\n"
-            f"За неделю расходов: {_rub(stats['expense'])}\n"
-            f"Средний расход в день: {_rub(daily_avg)}\n"
-            f"Прогноз на месяц при таком темпе: {_rub(monthly_forecast)}\n"
-            f"Постоянные расходы в данных: {_rub(stats['fixed'])}\n"
-            f"Переменные расходы: {_rub(variable)}\n\n"
+            "📍 <b>День 7: появился недельный ритм</b>\n\n"
+            "<blockquote>Неделя данных — уже не шум, а первые привычки в цифрах.</blockquote>\n\n"
+            f"За неделю расходов: <b>{_rub(stats['expense'])}</b>\n"
+            f"Средний расход в день: <b>{_rub(daily_avg)}</b>\n"
+            f"Прогноз на месяц при таком темпе: <b>{_rub(monthly_forecast)}</b>\n\n"
             "Главные статьи расходов:\n"
             + _top_lines(stats)
             + "\n\nМожно открыть ИИ-помощник и написать: «Собери мне плановый бюджет на месяц по моим данным»."
         )
     return (
-        "День 10: пробный период подходит к концу\n\n"
-        f"За пробный период записано операций: {stats['count']}.\n"
-        f"Доходы: {_rub(stats['income'])}\n"
-        f"Расходы: {_rub(stats['expense'])}\n"
-        f"Итоговый баланс по данным: {_rub(balance)}\n\n"
+        "🏁 <b>День 10: пробный период подходит к концу</b>\n\n"
+        "<blockquote>Лучший бюджет — тот, который помогает принимать решения без паники.</blockquote>\n\n"
+        f"За пробный период записано операций: <b>{stats['count']}</b>.\n"
+        f"💰 Доходы: <b>{_rub(stats['income'])}</b>\n"
+        f"💸 Расходы: <b>{_rub(stats['expense'])}</b>\n"
+        f"⚖️ Итоговый баланс по данным: <b>{_rub(balance)}</b>\n\n"
         "Самые заметные направления расходов:\n"
         + _top_lines(stats)
         + "\n\nЕсли бот помог увидеть картину, можно продлить доступ в тарифах."
@@ -172,7 +174,7 @@ async def send_trial_journey_messages(bot):
                 [InlineKeyboardButton(text="⭐ Тарифы", callback_data="premium")],
             ])
             try:
-                await bot.send_message(user_id, text, parse_mode=None, reply_markup=kb)
+                await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
                 await execute(
                     "INSERT INTO trial_journey_messages (user_id, day) VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (user_id, day),

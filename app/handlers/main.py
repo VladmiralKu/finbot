@@ -891,6 +891,63 @@ async def cb_settings(call: CallbackQuery):
     )
 
 
+@router.callback_query(F.data.startswith("kie_report:"))
+async def cb_kie_report_ready(call: CallbackQuery):
+    from app.services.kie_reports import extract_result_url, get_kie_task
+
+    task_id = call.data.split(":", 1)[1]
+    await call.answer("Проверяю отчёт...")
+    try:
+        task = await get_kie_task(task_id)
+    except Exception as e:
+        await call.message.answer(
+            "Не смог проверить красивый отчёт: " + str(e),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    state = task.get("state") or "unknown"
+    if state == "success":
+        image_url = extract_result_url(task)
+        if image_url:
+            await call.message.answer_photo(
+                image_url,
+                caption="Готово! Красивый отчёт собран.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+        else:
+            await call.message.answer(
+                "Отчёт завершён, но Kie.ai не вернул ссылку на картинку.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+        return
+
+    if state == "fail":
+        await call.message.answer(
+            "Kie.ai не смог собрать отчёт: " + (task.get("failMsg") or "без подробностей"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    progress = task.get("progress")
+    progress_text = "" if progress is None else " Прогресс: " + str(progress) + "%"
+    await call.message.answer(
+        "Отчёт ещё готовится." + progress_text + "\n\nПопробуй проверить ещё раз чуть позже.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Проверить ещё раз", callback_data="kie_report:" + task_id)],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
 # --- Быстрый ввод ---
 
 @router.message(F.text.regexp(r'^[+-]?\d+(?![.\d])'), StateFilter(default_state))
@@ -1948,6 +2005,48 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             int(params["month"]),
         )
         await message.answer(report_text, parse_mode="HTML", reply_markup=kb)
+        return True
+
+    if name == "beautiful_report":
+        from app.database import get_user_tier
+        from app.services.kie_reports import start_beautiful_report
+
+        tier = await get_user_tier(message.from_user.id)
+        if tier == "free":
+            await message.answer(
+                "Красивые отчёты доступны на платных тарифах.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return True
+
+        thinking = await message.answer("Собираю данные и запускаю красивый отчёт...")
+        try:
+            result = await start_beautiful_report(
+                message.from_user.id,
+                int(params["year"]),
+                int(params["month"]),
+            )
+            await thinking.edit_text(
+                "Запустил генерацию красивого отчёта.\n\n"
+                "Kie.ai принял задачу: " + result["task_id"] + "\n\n"
+                "Генерация обычно занимает немного времени. Нажми «Проверить готовность» через минуту.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Проверить готовность", callback_data="kie_report:" + result["task_id"])],
+                    [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+        except Exception as e:
+            await thinking.edit_text(
+                "Не смог запустить красивый отчёт: " + str(e),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
         return True
 
     if name == "show_recent":

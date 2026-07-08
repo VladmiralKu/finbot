@@ -133,6 +133,19 @@ def _looks_like_transaction_edit(lower: str) -> bool:
     return action_like and field_like and object_like
 
 
+def _looks_like_beautiful_report(lower: str) -> bool:
+    report_like = "отчет" in lower or "отчёт" in lower
+    beautiful_like = (
+        "красив" in lower
+        or "картин" in lower
+        or "изображ" in lower
+        or "инфограф" in lower
+        or "визуаль" in lower
+        or "pdf" in lower
+    )
+    return report_like and beautiful_like
+
+
 def _looks_like_add_recurring(lower: str) -> bool:
     add_like = (
         "добав" in lower
@@ -220,6 +233,13 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
         else:
             today = date.today()
             year, month = today.year, today.month
+        if _looks_like_beautiful_report(lower):
+            return {
+                "intent": "beautiful_report",
+                "confidence": 0.9,
+                "params": {"year": year, "month": month},
+                "needs_confirmation": False,
+            }
         return {
             "intent": "show_report",
             "confidence": 0.9,
