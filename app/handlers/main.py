@@ -2046,9 +2046,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                 int(params["month"]),
             )
             await thinking.edit_text(
-                "Принял. Собираю красивый отчёт и пришлю картинку сюда, когда она будет готова.
-
-"
+                "Принял. Собираю красивый отчёт и пришлю картинку сюда, когда она будет готова.\n\n"
                 "Обычно это занимает около минуты.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
