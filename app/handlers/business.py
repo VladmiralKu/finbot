@@ -29,7 +29,7 @@ async def _save_note(user_id: int, text: str):
     )
 
 
-NOTES_ORDER_SQL = "ORDER BY created_at DESC, id DESC"
+NOTES_ORDER_SQL = "ORDER BY created_at ASC, id ASC"
 
 
 async def _get_note_by_public_number(user_id: int, note_number: int):
