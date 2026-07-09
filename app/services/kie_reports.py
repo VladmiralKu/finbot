@@ -24,6 +24,7 @@ REPORT_MONTHS = (
     ("декабря", 12), ("декабрь", 12),
 )
 NOTE_EXCLUDE_MARKERS = ("без замет", "убери замет", "не добавляй замет", "не показывай замет")
+NOTE_INCLUDE_MARKERS = ("с замет", "добавь замет", "учти замет", "используй замет", "по замет")
 PLANNED_EXCLUDE_MARKERS = ("без планов", "без планир", "без постоян", "без регуляр", "без подпис")
 TEXT_LIMIT = 90
 
@@ -144,7 +145,9 @@ def _date_label(value) -> str:
 
 def _wants_notes(user_prompt: str | None) -> bool:
     lower = (user_prompt or "").lower()
-    return not any(marker in lower for marker in NOTE_EXCLUDE_MARKERS)
+    if any(marker in lower for marker in NOTE_EXCLUDE_MARKERS):
+        return False
+    return any(marker in lower for marker in NOTE_INCLUDE_MARKERS)
 
 
 def _wants_planned(user_prompt: str | None) -> bool:
@@ -293,6 +296,7 @@ async def build_report_prompt(
         "Правила:\n"
         "- Выполни именно просьбу пользователя: он может просить график, сравнение, один блок, исключение блоков или необычный визуальный стиль.\n"
         "- Если пользователь просит убрать заметки, плановые платежи или другой блок, не показывай этот блок.\n"
+        "- По умолчанию не используй заметки и финансовые цели. Заметки можно использовать только если пользователь явно попросил.\n"
         "- Можно использовать метафоры и оформление из просьбы пользователя, например котиков, но цифры должны остаться читаемыми.\n"
         "- Не раскрывай внутренние сервисы, API, провайдеров и технические детали.\n"
         "- Не добавляй вымышленные цифры. Используй только данные ниже.\n"

@@ -2512,6 +2512,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
 async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id: int, user_text: str):
     from app.database import get_user_tier
     from app.handlers.ai_assistant import (
+        AI_MODE_TALK,
         AIState,
         check_ai_limit,
         get_ai_response,
@@ -2544,10 +2545,15 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
     await state.set_state(AIState.chatting)
     thinking = await message.answer("Передаю в ИИ-помощник...")
     try:
-        ai_text, new_history = await get_ai_response(user_id, user_text, [], tier=tier)
-        await state.update_data(history=new_history[-20:])
+        ai_text, new_history = await get_ai_response(user_id, user_text, [], tier=tier, mode=AI_MODE_TALK)
+        await state.update_data(history=new_history[-20:], ai_mode=AI_MODE_TALK)
         await log_ai_usage(user_id)
-        clean_text, actions_log = await process_actions(user_id, ai_text)
+        clean_text, actions_log = await process_actions(
+            user_id,
+            ai_text,
+            user_text,
+            allow_actions=False,
+        )
         await thinking.delete()
         limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
         await message.answer(

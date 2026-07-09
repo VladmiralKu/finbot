@@ -4,10 +4,26 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
+import re
 import httpx
 import json
 
 router = Router()
+
+AI_MODE_TALK = "talk"
+AI_MODE_ACTION = "action"
+
+
+def _ai_mode_keyboard(mode: str) -> InlineKeyboardMarkup:
+    talk_text = "✓ Разговор" if mode == AI_MODE_TALK else "Разговор"
+    action_text = "✓ Действие" if mode == AI_MODE_ACTION else "Действие"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=talk_text, callback_data="ai_mode:" + AI_MODE_TALK),
+            InlineKeyboardButton(text=action_text, callback_data="ai_mode:" + AI_MODE_ACTION),
+        ],
+        [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
+    ])
 
 
 class AIState(StatesGroup):
@@ -97,10 +113,39 @@ async def get_user_context(user_id: int) -> str:
     )
 
 
-async def get_ai_response(user_id: int, user_message: str, history: list, tier: str = None) -> tuple[str, list]:
+async def get_ai_response(
+    user_id: int,
+    user_message: str,
+    history: list,
+    tier: str = None,
+    mode: str = AI_MODE_TALK,
+) -> tuple[str, list]:
     import os
 
     context = await get_user_context(user_id)
+
+    if mode == AI_MODE_ACTION:
+        mode_prompt = (
+            "РЕЖИМ: Действие. Пользователь ожидает, что ты поможешь привести разговор к конкретному действию внутри бота. "
+            "Можно выполнять реальные действия только через специальные строки в конце ответа.\n\n"
+            "ДЕЙСТВИЯ (добавляй в конец ответа только если нужен реальный action внутри бота):\n"
+            "Для внесения транзакции:\n"
+            "TRANSACTION: -1500 Еда/Продукты\n"
+            "Для сохранения цели:\n"
+            "GOAL: накопить 200000 к августу 2026\n"
+            "Для удаления неактуальной цели:\n"
+            "DELETE_GOAL: #12\n"
+            "Если номера нет, можно написать текст цели: DELETE_GOAL: накопить 200000\n"
+            "Если просьба неоднозначная, сначала задай короткий уточняющий вопрос и не выполняй действие.\n\n"
+        )
+    else:
+        mode_prompt = (
+            "РЕЖИМ: Разговор. Это безопасный режим для обсуждения, анализа и развития мысли. "
+            "Ты можешь использовать данные пользователя как контекст, но НЕ меняй ничего в боте. "
+            "Не добавляй, не удаляй и не редактируй транзакции, категории, цели, заметки или платежи. "
+            "Никогда не выводи служебные строки TRANSACTION, GOAL или DELETE_GOAL в этом режиме. "
+            "Если пользователь просит выполнить действие, предложи переключиться в режим «Действие».\n\n"
+        )
 
     system_prompt = (
         "Ты Баланс — персональный ассистент в финансовом приложении. "
@@ -114,21 +159,11 @@ async def get_ai_response(user_id: int, user_message: str, history: list, tier: 
         "- Составлять финансовые планы\n"
         "- Давать конкретные рекомендации с цифрами\n"
         "- Запоминать цели пользователя\n\n"
+        + mode_prompt +
         "ПРАВИЛА ОТВЕТОВ:\n"
         "- Отвечай по существу вопроса, кратко если возможно\n"
         "- Если вопрос финансовый — используй цифры из контекста пользователя\n"
         "- Не повторяй контекст пользователю дословно\n\n"
-        "ДЕЙСТВИЯ (добавляй в конец ответа только если нужен реальный финансовый action):\n"
-        "Для внесения транзакции:\n"
-        "TRANSACTION: -1500 Еда/Продукты\n"
-        "TRANSACTION используй только если пользователь явно просит записать/внести/добавить операцию. "
-        "Если пользователь просит найти, показать, проверить или проанализировать расход — не создавай TRANSACTION.\n"
-        "Для сохранения цели:\n"
-        "GOAL: накопить 200000 к августу 2026\n"
-        "Для удаления неактуальной цели:\n"
-        "DELETE_GOAL: #12\n"
-        "Если номера нет, можно написать текст цели: DELETE_GOAL: накопить 200000\n"
-        "Можно несколько действий сразу. Если действий нет — не пиши эти строки.\n\n"
         + context
     )
 
@@ -243,16 +278,22 @@ def _user_requested_transaction_action(user_message: str) -> bool:
     )
     if any(marker in lower for marker in lookup_markers):
         return False
+    money_like = re.search(r"\d[\d\s]*(?:[,.]\d+)?\s*(?:р|руб|рубл|₽)?", lower)
     action_markers = (
         "внеси", "внести", "запиши", "записать", "добавь", "добавить",
         "потратил", "потратила", "потрачено", "купил", "купила", "оплатил",
         "оплатила", "заработал", "заработала", "получил", "получила",
         "доход", "расход",
     )
-    return any(marker in lower for marker in action_markers)
+    return any(marker in lower for marker in action_markers) or bool(money_like)
 
 
-async def process_actions(user_id: int, ai_text: str, user_message: str = "") -> tuple[str, str]:
+async def process_actions(
+    user_id: int,
+    ai_text: str,
+    user_message: str = "",
+    allow_actions: bool = True,
+) -> tuple[str, str]:
     from app.database import execute
     from app.services.insights import build_transaction_insight
     from app.services.transaction_ai import extract_transactions_from_text
@@ -264,7 +305,7 @@ async def process_actions(user_id: int, ai_text: str, user_message: str = "") ->
     for line in ai_text.split("\n"):
         if line.startswith("TRANSACTION:"):
             tx_str = line.replace("TRANSACTION:", "").strip()
-            if not _user_requested_transaction_action(user_message):
+            if not allow_actions or not _user_requested_transaction_action(user_message):
                 continue
             try:
                 transactions = await extract_transactions_from_text(user_id, tx_str, source="ai")
@@ -289,6 +330,8 @@ async def process_actions(user_id: int, ai_text: str, user_message: str = "") ->
                 actions_log += "\nОшибка внесения транзакции: " + str(e)
         elif line.startswith("GOAL:"):
             goal_text = line.replace("GOAL:", "").strip()
+            if not allow_actions:
+                continue
             try:
                 await execute(
                     "INSERT INTO user_goals (user_id, goal_text) VALUES (%s, %s)",
@@ -299,6 +342,8 @@ async def process_actions(user_id: int, ai_text: str, user_message: str = "") ->
                 actions_log += "\nОшибка сохранения цели: " + str(e)
         elif line.startswith("DELETE_GOAL:"):
             goal_query = line.replace("DELETE_GOAL:", "").strip()
+            if not allow_actions:
+                continue
             try:
                 _, message = await delete_goal_by_query(user_id, goal_query)
                 actions_log += "\n" + message
@@ -340,25 +385,19 @@ async def open_ai_assistant(target, state: FSMContext, user_id: int, edit: bool 
         return
 
     await state.set_state(AIState.chatting)
-    await state.update_data(history=[])
+    await state.update_data(history=[], ai_mode=AI_MODE_TALK)
 
     limit_str = "безлимит" if limit >= 9999 else str(used) + "/" + str(limit)
 
     greeting = (
         "Баланс — твой ИИ-помощник\n\n"
-        "Могу помочь:\n"
-        "- Внести транзакцию ('потратил 3500 на продукты')\n"
-        "- Проанализировать расходы и доходы\n"
-        "- Составить план выхода из минуса\n"
-        "- Сохранить или удалить финансовую цель\n"
-        "- Запустить красивый отчёт: «сделай красивый отчёт за июль»\n"
-        "- Ответить на обычные вопросы не только про финансы\n\n"
+        "Сейчас включён режим «Разговор»: можно обсуждать идеи, анализировать цифры и задавать вопросы. "
+        "В этом режиме я ничего не меняю в боте.\n\n"
+        "Переключись в «Действие», если нужно записать операцию, изменить данные, цель, категорию или запустить отчёт.\n\n"
         "Сообщений: " + limit_str
     )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
-    ])
+    kb = _ai_mode_keyboard(AI_MODE_TALK)
     if edit:
         await target.edit_text(greeting, parse_mode=None, reply_markup=kb)
     else:
@@ -374,6 +413,28 @@ async def cb_ai_assistant(call: CallbackQuery, state: FSMContext):
 @router.message(Command("ai"))
 async def cmd_ai_assistant(message: Message, state: FSMContext):
     await open_ai_assistant(message, state, message.from_user.id, edit=False)
+
+
+@router.callback_query(F.data.startswith("ai_mode:"))
+async def cb_ai_mode(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    mode = call.data.split(":", 1)[1]
+    if mode not in (AI_MODE_TALK, AI_MODE_ACTION):
+        mode = AI_MODE_TALK
+    await state.set_state(AIState.chatting)
+    await state.update_data(ai_mode=mode, history=[])
+    if mode == AI_MODE_ACTION:
+        text = (
+            "Режим «Действие» включён.\n\n"
+            "Теперь можно писать команды обычными словами: «еда 500», «измени категорию у последней операции», "
+            "«сохрани цель накопить 200000»."
+        )
+    else:
+        text = (
+            "Режим «Разговор» включён.\n\n"
+            "Можно обсуждать, анализировать и развивать мысли. В этом режиме я ничего не меняю в боте."
+        )
+    await call.message.edit_text(text, parse_mode=None, reply_markup=_ai_mode_keyboard(mode))
 
 
 @router.callback_query(F.data == "ai_end")
@@ -419,27 +480,32 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             await thinking.edit_text("Не удалось распознать голос.")
             return
         await thinking.delete()
-        from app.handlers.main import handle_intent_message
-        handled = await handle_intent_message(message, state, text, source="ai_voice")
-        if handled:
-            return
         data = await state.get_data()
+        mode = data.get("ai_mode", AI_MODE_TALK)
+        if mode == AI_MODE_ACTION:
+            from app.handlers.main import handle_intent_message
+            handled = await handle_intent_message(message, state, text, source="ai_action")
+            if handled:
+                return
         history = data.get('history', [])
         from app.database import save_ai_message
         from app.database import get_user_tier
         tier = await get_user_tier(message.from_user.id)
-        ai_text, new_history = await get_ai_response(message.from_user.id, text, history, tier=tier)
+        ai_text, new_history = await get_ai_response(message.from_user.id, text, history, tier=tier, mode=mode)
         await state.update_data(history=new_history[-20:])
         await save_ai_message(message.from_user.id, 'user', text)
         await save_ai_message(message.from_user.id, 'assistant', ai_text)
         await log_ai_usage(message.from_user.id)
-        clean_text, actions_log = await process_actions(message.from_user.id, ai_text, text)
+        clean_text, actions_log = await process_actions(
+            message.from_user.id,
+            ai_text,
+            text,
+            allow_actions=(mode == AI_MODE_ACTION),
+        )
         await message.answer(
             "🗣️ " + clean_text + actions_log,
             parse_mode=None,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
-            ])
+            reply_markup=_ai_mode_keyboard(mode)
         )
     except Exception as e:
         try:
@@ -465,20 +531,22 @@ async def msg_ai_chat(message: Message, state: FSMContext):
 
     data = await state.get_data()
     history = data.get('history', [])
+    mode = data.get("ai_mode", AI_MODE_TALK)
 
     thinking_msg = await message.answer("Думаю...", parse_mode=None)
 
     try:
         user_text = message.text or message.caption or ""
-        from app.handlers.main import handle_intent_message
-        handled = await handle_intent_message(message, state, user_text, source="ai_chat")
-        if handled:
-            await thinking_msg.delete()
-            return
+        if mode == AI_MODE_ACTION:
+            from app.handlers.main import handle_intent_message
+            handled = await handle_intent_message(message, state, user_text, source="ai_action")
+            if handled:
+                await thinking_msg.delete()
+                return
         from app.database import get_user_tier
         current_tier = await get_user_tier(message.from_user.id)
         ai_text, new_history = await get_ai_response(
-            message.from_user.id, user_text, history, tier=current_tier
+            message.from_user.id, user_text, history, tier=current_tier, mode=mode
         )
         await log_ai_usage(message.from_user.id)
     except Exception as e:
@@ -487,7 +555,12 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         return
 
     await state.update_data(history=new_history[-20:])
-    clean_text, actions_log = await process_actions(message.from_user.id, ai_text, user_text)
+    clean_text, actions_log = await process_actions(
+        message.from_user.id,
+        ai_text,
+        user_text,
+        allow_actions=(mode == AI_MODE_ACTION),
+    )
 
     await thinking_msg.delete()
 
@@ -495,7 +568,5 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     await message.answer(
         "🗣️ " + clean_text + actions_log + "\n\n[" + limit_str + "]",
         parse_mode=None,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
-        ])
+        reply_markup=_ai_mode_keyboard(mode)
     )
