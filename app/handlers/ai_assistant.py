@@ -434,7 +434,11 @@ async def cb_ai_mode(call: CallbackQuery, state: FSMContext):
             "Режим «Разговор» включён.\n\n"
             "Можно обсуждать, анализировать и развивать мысли. В этом режиме я ничего не меняю в боте."
         )
-    await call.message.edit_text(text, parse_mode=None, reply_markup=_ai_mode_keyboard(mode))
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await call.message.answer(text, parse_mode=None, reply_markup=_ai_mode_keyboard(mode))
 
 
 @router.callback_query(F.data == "ai_end")
@@ -457,7 +461,7 @@ async def cb_ai_end(call: CallbackQuery, state: FSMContext):
 async def msg_ai_voice(message: Message, state: FSMContext):
     """Голосовое сообщение в ИИ-помощнике."""
     import httpx, os
-    from app.handlers.voice import transcribe_voice
+    from app.handlers.voice import format_recognized_text, transcribe_voice
     from app.database import get_user_tier
 
     voice_check_tier = await get_user_tier(message.from_user.id)
@@ -479,7 +483,7 @@ async def msg_ai_voice(message: Message, state: FSMContext):
         if not text:
             await thinking.edit_text("Не удалось распознать голос.")
             return
-        await thinking.delete()
+        await thinking.edit_text(format_recognized_text(text), parse_mode="HTML")
         data = await state.get_data()
         mode = data.get("ai_mode", AI_MODE_TALK)
         if mode == AI_MODE_ACTION:
@@ -508,11 +512,7 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             reply_markup=_ai_mode_keyboard(mode)
         )
     except Exception as e:
-        try:
-            await thinking.delete()
-        except Exception:
-            pass
-        await message.answer("Ошибка: " + str(e))
+        await thinking.edit_text("Ошибка: " + str(e))
 
 
 @router.message(AIState.chatting)
@@ -533,16 +533,14 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     history = data.get('history', [])
     mode = data.get("ai_mode", AI_MODE_TALK)
 
-    thinking_msg = await message.answer("Думаю...", parse_mode=None)
-
     try:
         user_text = message.text or message.caption or ""
         if mode == AI_MODE_ACTION:
             from app.handlers.main import handle_intent_message
             handled = await handle_intent_message(message, state, user_text, source="ai_action")
             if handled:
-                await thinking_msg.delete()
                 return
+        thinking_msg = await message.answer("Думаю...", parse_mode=None)
         from app.database import get_user_tier
         current_tier = await get_user_tier(message.from_user.id)
         ai_text, new_history = await get_ai_response(
@@ -550,8 +548,10 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         )
         await log_ai_usage(message.from_user.id)
     except Exception as e:
-        await thinking_msg.delete()
-        await message.answer("Ошибка: " + str(e))
+        if "thinking_msg" in locals():
+            await thinking_msg.edit_text("Ошибка: " + str(e))
+        else:
+            await message.answer("Ошибка: " + str(e))
         return
 
     await state.update_data(history=new_history[-20:])
@@ -562,10 +562,8 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         allow_actions=(mode == AI_MODE_ACTION),
     )
 
-    await thinking_msg.delete()
-
     limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
-    await message.answer(
+    await thinking_msg.edit_text(
         "🗣️ " + clean_text + actions_log + "\n\n[" + limit_str + "]",
         parse_mode=None,
         reply_markup=_ai_mode_keyboard(mode)

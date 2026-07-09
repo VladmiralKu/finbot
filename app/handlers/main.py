@@ -7,6 +7,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from datetime import date, datetime, timedelta
 import asyncio
+import re
 from html import escape
 
 from app.database import (
@@ -84,6 +85,68 @@ def _looks_like_edit_confusion(text: str) -> bool:
     )
     object_like = "категор" in lower or "стать" in lower or "раздел" in lower
     return action_like and object_like
+
+
+MANUAL_AMOUNT_RE = re.compile(r"(?<!\d)([+-]?\d[\d\s]*(?:[,.]\d{1,2})?)(?!\d)")
+MANUAL_AMOUNT_WITH_CURRENCY_RE = re.compile(
+    r"(?<!\d)([+-]?\d[\d\s]*(?:[,.]\d{1,2})?)\s*"
+    r"(?:₽|р\.?|руб\.?|рублей|рубля|рубль)(?![а-яёa-z0-9])",
+    re.IGNORECASE,
+)
+MANUAL_MONTH_MARKERS = (
+    "январ", "феврал", "март", "апрел", "мая", "май", "июн",
+    "июл", "август", "сентябр", "октябр", "ноябр", "декабр",
+)
+
+
+def _manual_amount_value(raw: str) -> float | None:
+    try:
+        return abs(float(raw.replace(" ", "").replace(",", ".").lstrip("+-")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _manual_transaction_date(text: str) -> date:
+    lower = (text or "").lower()
+    if "позавчера" in lower:
+        return date.today() - timedelta(days=2)
+    if "вчера" in lower:
+        return date.today() - timedelta(days=1)
+    return date.today()
+
+
+def _parse_safe_manual_input(text: str) -> dict | None:
+    value = " ".join((text or "").strip().split())
+    if not value:
+        return None
+
+    matches = list(MANUAL_AMOUNT_WITH_CURRENCY_RE.finditer(value))
+    if not matches:
+        matches = list(MANUAL_AMOUNT_RE.finditer(value))
+
+    candidates = []
+    lower = value.lower()
+    for match in matches:
+        amount = _manual_amount_value(match.group(1))
+        if not amount or amount <= 0:
+            continue
+        if 1900 <= amount <= 2100 and any(marker in lower for marker in MANUAL_MONTH_MARKERS):
+            continue
+        candidates.append((amount, match))
+
+    if not candidates:
+        return None
+
+    amount, match = max(candidates, key=lambda item: item[0])
+    comment = (value[:match.start()] + " " + value[match.end():]).strip()
+    comment = re.sub(r"\b(?:сегодня|вчера|позавчера)\b", " ", comment, flags=re.IGNORECASE)
+    comment = re.sub(r"^\s*(?:за|на|в|по)\s+", "", comment, flags=re.IGNORECASE)
+    comment = re.sub(r"\s+", " ", comment).strip(" .,!?:;-")
+    return {
+        "amount": amount,
+        "comment": comment,
+        "transaction_date": _manual_transaction_date(value),
+    }
 
 
 WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -323,11 +386,10 @@ async def msg_quick_category_new_name(message: Message, state: FSMContext):
 async def cb_manual_input(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.message.edit_text(
-        "✍️ <b>Ручной ввод</b>\n\n"
-        "Здесь можно записать расход или доход кнопками.\n"
-        "Выбери тип операции, категорию, сумму и комментарий.\n\n"
-        "Можно проще: писать или говорить голосом из любого места бота, например: "
-        "«кофе 250», «получил зарплату 50000», «продукты 3200 и такси 700».",
+        "✍️ <b>Ввод без ошибок</b>\n\n"
+        "Сначала выбираешь тип и категорию кнопками, потом пишешь или говоришь сумму с комментарием.\n"
+        "Так категория не угадывается и не попадает случайно в «нету».\n\n"
+        "Пример после выбора категории: <i>500 р блабла ла коммент</i>",
         parse_mode="HTML",
         reply_markup=manual_input_keyboard(),
     )
@@ -408,26 +470,64 @@ async def msg_category_command(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("cat:"))
 async def cb_category_selected(call: CallbackQuery, state: FSMContext):
     _, cat_id, kind = call.data.split(":")
-    await state.update_data(category_id=int(cat_id), kind=kind)
-    await state.set_state(AddTransaction.entering_amount)
-    await call.message.edit_text("Введи сумму (например: 350):")
-
-
-@router.message(AddTransaction.entering_amount)
-async def msg_amount(message: Message, state: FSMContext):
-    try:
-        amount = float(message.text.replace(",", ".").replace(" ", ""))
-        if amount <= 0:
-            raise ValueError
-    except (ValueError, AttributeError):
-        await message.answer("Введи корректную сумму, например: 1500")
-        return
-    await state.update_data(amount=amount)
-    await state.set_state(AddTransaction.entering_comment)
-    await message.answer(
-        "Добавь комментарий (необязательно).\n"
-        "Или напиши /skip чтобы пропустить."
+    row = await fetchone(
+        "SELECT name, type, kind FROM categories WHERE id=%s AND user_id=%s",
+        (int(cat_id), call.from_user.id),
     )
+    if not row:
+        await call.answer("Категория не найдена.", show_alert=True)
+        return
+    category_name, category_type, category_kind = row
+    await state.update_data(
+        category_id=int(cat_id),
+        category_name=category_name,
+        tx_type=category_type,
+        kind=category_kind or kind,
+    )
+    await state.set_state(AddTransaction.entering_amount)
+    await call.message.edit_text(
+        "Ввод без ошибок включён.\n\n"
+        f"Категория: «{category_name}»\n\n"
+        "Теперь напиши или скажи голосом сумму и комментарий одним сообщением.\n"
+        "Например: «500 р блабла ла коммент»."
+    )
+
+
+@router.message(AddTransaction.entering_amount, F.voice)
+async def msg_safe_manual_voice(message: Message, state: FSMContext):
+    from app.handlers.voice import format_recognized_text, transcribe_voice
+
+    thinking = await message.answer("Распознаю голос...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        text = await transcribe_voice(file_bytes.read())
+        if not text:
+            await thinking.edit_text("Не удалось распознать голос. Попробуй ещё раз.")
+            return
+        await thinking.edit_text(format_recognized_text(text), parse_mode="HTML")
+        await _save_safe_manual_transaction(message, state, text)
+    except Exception as e:
+        await thinking.edit_text("Ошибка распознавания: " + str(e))
+
+
+@router.message(AddTransaction.entering_amount, F.text)
+async def msg_amount(message: Message, state: FSMContext):
+    await _save_safe_manual_transaction(message, state, message.text or "")
+
+
+async def _save_safe_manual_transaction(message: Message, state: FSMContext, text: str):
+    parsed = _parse_safe_manual_input(text)
+    if not parsed:
+        await message.answer(
+            "Не нашёл сумму. Напиши, например: «500 р комментарий» или просто «500»."
+        )
+        return
+    await state.update_data(
+        amount=parsed["amount"],
+        transaction_date=parsed["transaction_date"],
+    )
+    await _save_transaction(message, state, comment=parsed["comment"])
 
 
 @router.message(AddTransaction.entering_comment, Command("skip"))
@@ -449,13 +549,18 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
         type_=data["tx_type"],
         kind=data["kind"],
         comment=comment,
+        transaction_date=data.get("transaction_date"),
     )
     await state.clear()
     sign = "−" if data["tx_type"] == "expense" else "+"
     kind_label = {"fixed": "постоянный", "variable": "переменный", "income": "доход"}.get(data["kind"], "")
+    tx_date = data.get("transaction_date") or date.today()
+    category_name = data.get("category_name") or "выбранная категория"
     text = (
         f"✅ Записано!\n\n"
         f"{sign}{data['amount']:,.0f} ₽  •  {kind_label}\n"
+        f"📂 {category_name}\n"
+        f"📅 {tx_date.strftime('%d.%m.%Y')}\n"
         f"{_format_comment_block(comment)}"
     )
     insight = await build_transaction_insight(message.from_user.id, tx["id"])
@@ -2514,6 +2619,7 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
     from app.handlers.ai_assistant import (
         AI_MODE_TALK,
         AIState,
+        _ai_mode_keyboard,
         check_ai_limit,
         get_ai_response,
         log_ai_usage,
@@ -2554,21 +2660,14 @@ async def send_text_to_ai_assistant(message: Message, state: FSMContext, user_id
             user_text,
             allow_actions=False,
         )
-        await thinking.delete()
         limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
-        await message.answer(
+        await thinking.edit_text(
             "🗣️ " + clean_text + actions_log + "\n\n[" + limit_str + "]",
             parse_mode=None,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Завершить", callback_data="ai_end")],
-            ]),
+            reply_markup=_ai_mode_keyboard(AI_MODE_TALK),
         )
     except Exception as e:
-        try:
-            await thinking.delete()
-        except Exception:
-            pass
-        await message.answer(
+        await thinking.edit_text(
             "Не смог передать в ИИ-помощник: " + str(e),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],

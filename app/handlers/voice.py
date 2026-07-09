@@ -91,6 +91,7 @@ async def msg_voice(message: Message, state: FSMContext):
     from app.database import get_user_tier
     from app.handlers.ai_assistant import AIState
     from app.handlers.business import NoteDeleteState, NoteSearchState, NoteState
+    from app.handlers.main import AddTransaction
     from app.services.insights import build_first_transaction_insight
     from app.services.transaction_ai import extract_transactions_from_text
     from app.services.transaction_service import create_transaction
@@ -98,6 +99,9 @@ async def msg_voice(message: Message, state: FSMContext):
     current_state = await state.get_state()
     forbidden_states = {
         AIState.chatting.state,
+        AddTransaction.choosing_category.state,
+        AddTransaction.entering_amount.state,
+        AddTransaction.entering_comment.state,
         NoteDeleteState.waiting_id.state,
         NoteState.waiting_text.state,
         NoteSearchState.waiting_id.state,

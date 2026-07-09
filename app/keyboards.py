@@ -11,7 +11,7 @@ MAIN_REPLY_KB = ReplyKeyboardMarkup(
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✍️ Ручной ввод", callback_data="manual_input"),
+            InlineKeyboardButton(text="✍️ Ввод без ошибок", callback_data="manual_input"),
         ],
         [
             InlineKeyboardButton(text="📋 Последние", callback_data="recent"),
