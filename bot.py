@@ -104,6 +104,38 @@ async def main():
     except Exception as e:
         logger.warning("Migration trial journey: " + str(e))
 
+    try:
+        from app.database import execute
+        await execute("""
+            CREATE TABLE IF NOT EXISTS daily_activity_reminders (
+                user_id BIGINT NOT NULL,
+                reminder_date DATE NOT NULL,
+                sent_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, reminder_date)
+            )
+        """)
+        await execute("""
+            CREATE TABLE IF NOT EXISTS weekly_reports (
+                user_id BIGINT NOT NULL,
+                week_start DATE NOT NULL,
+                sent_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, week_start)
+            )
+        """)
+        await execute("""
+            CREATE TABLE IF NOT EXISTS user_goals (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                goal_text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await execute("ALTER TABLE user_goals ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
+        await execute("CREATE INDEX IF NOT EXISTS idx_user_goals_user ON user_goals(user_id, updated_at)")
+    except Exception as e:
+        logger.warning("Migration engagement tables: " + str(e))
+
     scheduler = setup_scheduler(bot)
 
     from app.webhook_server import start_webhook_server

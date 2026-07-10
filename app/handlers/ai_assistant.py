@@ -12,10 +12,11 @@ router = Router()
 
 AI_MODE_TALK = "talk"
 AI_MODE_ACTION = "action"
+AI_MODE_PROFILE = "profile"
 
 
 def _ai_mode_keyboard(mode: str) -> InlineKeyboardMarkup:
-    talk_text = "✓ Разговор" if mode == AI_MODE_TALK else "Разговор"
+    talk_text = "✓ Разговор" if mode in (AI_MODE_TALK, AI_MODE_PROFILE) else "Разговор"
     action_text = "✓ Действие" if mode == AI_MODE_ACTION else "Действие"
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -131,12 +132,21 @@ async def get_ai_response(
             "ДЕЙСТВИЯ (добавляй в конец ответа только если нужен реальный action внутри бота):\n"
             "Для внесения транзакции:\n"
             "TRANSACTION: -1500 Еда/Продукты\n"
-            "Для сохранения цели:\n"
-            "GOAL: накопить 200000 к августу 2026\n"
+            "Для сохранения или обновления финансовой цели/описания пользователя:\n"
+            "GOAL: хочу выйти из минуса, снизить импульсивные траты и накопить резерв\n"
             "Для удаления неактуальной цели:\n"
             "DELETE_GOAL: #12\n"
-            "Если номера нет, можно написать текст цели: DELETE_GOAL: накопить 200000\n"
+            "Если номера нет, можно написать текст цели: DELETE_GOAL: накопить резерв\n"
             "Если просьба неоднозначная, сначала задай короткий уточняющий вопрос и не выполняй действие.\n\n"
+        )
+    elif mode == AI_MODE_PROFILE:
+        mode_prompt = (
+            "РЕЖИМ: Знакомство. Пользователь только начинает работу и может рассказать о себе, доходах, проблемах, "
+            "страхах, привычках и финансовой цели. Помоги ему сформулировать главное финансовое описание. "
+            "Можно сохранять только GOAL, не выполняй транзакции, не меняй категории, не удаляй данные.\n\n"
+            "Если пользователь рассказал о себе или цели, добавь в конец ответа служебную строку:\n"
+            "GOAL: краткое описание цели, контекста и финансовой проблемы пользователя\n"
+            "Если информации мало, задай один тёплый уточняющий вопрос и не добавляй GOAL.\n\n"
         )
     else:
         mode_prompt = (
@@ -293,6 +303,8 @@ async def process_actions(
     ai_text: str,
     user_message: str = "",
     allow_actions: bool = True,
+    allow_transactions: bool = True,
+    allow_goals: bool = True,
 ) -> tuple[str, str]:
     from app.database import execute
     from app.services.insights import build_transaction_insight
@@ -303,9 +315,10 @@ async def process_actions(
     insight_added = False
 
     for line in ai_text.split("\n"):
-        if line.startswith("TRANSACTION:"):
-            tx_str = line.replace("TRANSACTION:", "").strip()
-            if not allow_actions or not _user_requested_transaction_action(user_message):
+        action_line = line.strip()
+        if action_line.startswith("TRANSACTION:"):
+            tx_str = action_line.replace("TRANSACTION:", "").strip()
+            if not allow_actions or not allow_transactions or not _user_requested_transaction_action(user_message):
                 continue
             try:
                 transactions = await extract_transactions_from_text(user_id, tx_str, source="ai")
@@ -328,21 +341,24 @@ async def process_actions(
                             insight_added = True
             except Exception as e:
                 actions_log += "\nОшибка внесения транзакции: " + str(e)
-        elif line.startswith("GOAL:"):
-            goal_text = line.replace("GOAL:", "").strip()
-            if not allow_actions:
+        elif action_line.startswith("GOAL:"):
+            goal_text = action_line.replace("GOAL:", "").strip()
+            if not allow_actions or not allow_goals:
+                continue
+            if not goal_text:
                 continue
             try:
+                await execute("DELETE FROM user_goals WHERE user_id = %s", (user_id,))
                 await execute(
                     "INSERT INTO user_goals (user_id, goal_text) VALUES (%s, %s)",
                     (user_id, goal_text)
                 )
-                actions_log += "\nЦель сохранена!"
+                actions_log += "\nФинансовая цель обновлена!"
             except Exception as e:
                 actions_log += "\nОшибка сохранения цели: " + str(e)
-        elif line.startswith("DELETE_GOAL:"):
-            goal_query = line.replace("DELETE_GOAL:", "").strip()
-            if not allow_actions:
+        elif action_line.startswith("DELETE_GOAL:"):
+            goal_query = action_line.replace("DELETE_GOAL:", "").strip()
+            if not allow_actions or not allow_goals:
                 continue
             try:
                 _, message = await delete_goal_by_query(user_id, goal_query)
@@ -504,7 +520,9 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             message.from_user.id,
             ai_text,
             text,
-            allow_actions=(mode == AI_MODE_ACTION),
+            allow_actions=(mode in (AI_MODE_ACTION, AI_MODE_PROFILE)),
+            allow_transactions=(mode == AI_MODE_ACTION),
+            allow_goals=True,
         )
         await message.answer(
             "🗣️ " + clean_text + actions_log,
@@ -559,7 +577,9 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         message.from_user.id,
         ai_text,
         user_text,
-        allow_actions=(mode == AI_MODE_ACTION),
+        allow_actions=(mode in (AI_MODE_ACTION, AI_MODE_PROFILE)),
+        allow_transactions=(mode == AI_MODE_ACTION),
+        allow_goals=True,
     )
 
     limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
