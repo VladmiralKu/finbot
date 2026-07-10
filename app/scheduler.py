@@ -17,6 +17,33 @@ def _week_bounds(today: date | None = None) -> tuple[date, date]:
     return start, start + timedelta(days=6)
 
 
+DEFAULT_EMPTY_DAY_REMINDER = (
+    "🌙 <b>Сегодня ещё пусто</b>\n\n"
+    "<blockquote>Одна короткая запись сегодня — меньше тумана завтра.</blockquote>\n\n"
+    "Если были траты или доходы, просто внеси их, когда будет удобно. "
+    "Если день без операций — всё нормально, двигаемся дальше."
+)
+
+CUSTOM_EMPTY_DAY_REMINDERS = (
+    "🧘 <b>Правильно я понимаю, ты сегодня экономишь?</b>",
+    "📡 <b>Отмазка «не было интернета, поэтому и не внесено» уже не работает.</b>",
+    "🚪 <b>Выйти из дома уже рублей 200 стоит — ты спишь, наверно.</b>",
+)
+
+
+async def _empty_day_reminder_text(user_id: int) -> str:
+    row = await fetchone(
+        "SELECT COUNT(*) FROM daily_activity_reminders WHERE user_id=%s",
+        (user_id,),
+    )
+    reminder_number = (int(row[0]) if row else 0) + 1
+    if reminder_number % 3 != 0:
+        return DEFAULT_EMPTY_DAY_REMINDER
+
+    custom_index = (reminder_number // 3 - 1) % len(CUSTOM_EMPTY_DAY_REMINDERS)
+    return CUSTOM_EMPTY_DAY_REMINDERS[custom_index]
+
+
 async def send_reminders(bot):
     try:
         payments = await get_todays_reminders()
@@ -212,18 +239,9 @@ async def send_daily_activity_reminders(bot):
                  )"""
         )
         for (user_id,) in rows:
-            text = (
-                "🌙 <b>Сегодня ещё пусто</b>\n\n"
-                "<blockquote>Одна короткая запись сегодня — меньше тумана завтра.</blockquote>\n\n"
-                "Если были траты или доходы, внеси их сейчас. Можно просто написать: «кофе 250».\n"
-                "Если день без операций — ответь «сегодня ничего», и я спокойно отстану до завтра."
-            )
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✍️ Ручной ввод", callback_data="manual_input")],
-                [InlineKeyboardButton(text="🤖 ИИ-помощник", callback_data="ai_assistant")],
-            ])
+            text = await _empty_day_reminder_text(user_id)
             try:
-                await bot.send_message(user_id, text, parse_mode="HTML", reply_markup=kb)
+                await bot.send_message(user_id, text, parse_mode="HTML")
                 await execute(
                     """INSERT INTO daily_activity_reminders (user_id, reminder_date)
                        VALUES (%s, CURRENT_DATE)
@@ -396,7 +414,7 @@ def setup_scheduler(bot):
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(send_reminders, "cron", hour=9, minute=0, args=[bot])
     scheduler.add_job(send_trial_journey_messages, "cron", hour=10, minute=0, args=[bot])
-    scheduler.add_job(send_daily_activity_reminders, "cron", hour=20, minute=30, args=[bot])
+    scheduler.add_job(send_daily_activity_reminders, "cron", hour=12, minute=0, args=[bot])
     scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=19, minute=0, args=[bot])
     scheduler.start()
     return scheduler
