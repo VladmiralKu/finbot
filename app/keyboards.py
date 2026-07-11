@@ -37,6 +37,13 @@ def manual_input_keyboard():
     ])
 
 
+def onboarding_finish_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Записать первую операцию", callback_data="main_menu")],
+        [InlineKeyboardButton(text="Пропустить", callback_data="main_menu")],
+    ])
+
+
 def reports_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],

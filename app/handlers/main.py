@@ -20,6 +20,7 @@ from app.keyboards import (
     MAIN_REPLY_KB,
     main_menu,
     manual_input_keyboard,
+    onboarding_finish_keyboard,
     categories_keyboard,
     confirm_keyboard,
     premium_keyboard,
@@ -209,6 +210,22 @@ async def render_categories_text(user_id: int) -> str:
     return text
 
 
+async def _send_welcome_voice(message: Message):
+    from app.database import get_bot_setting
+
+    try:
+        voice_file_id = await get_bot_setting("welcome_voice_file_id")
+    except Exception:
+        return
+    if not voice_file_id:
+        return
+
+    try:
+        await message.answer_voice(voice_file_id)
+    except Exception:
+        return
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
@@ -219,16 +236,18 @@ async def cmd_start(message: Message, state: FSMContext):
         user.full_name or "",
         user.language_code or "ru",
     )
-    from app.handlers.ai_assistant import AI_MODE_PROFILE, AIState, _ai_mode_keyboard
+    await _send_welcome_voice(message)
+
+    from app.handlers.ai_assistant import AI_MODE_PROFILE, AIState
 
     intro = (
-        "👋 <b>Привет! Я Баланс.</b>\n\n"
-        "<i>Деньги любят ясность, а не напряжение.</i>\n\n"
-        "Давай сначала познакомимся. Расскажи обычным сообщением:\n"
-        "• какая у тебя сейчас финансовая цель;\n"
-        "• что хочется наладить в деньгах;\n"
-        "• какие есть сложности, привычки или страхи.\n\n"
-        "Я сохраню это как твою главную финансовую цель/описание и дальше буду опираться на неё в отчётах и выводах."
+        "👋 <b>Я Баланс.</b>\n\n"
+        "Деньги любят ясность. А ещё они почему-то любят исчезать, когда их не записывают.\n\n"
+        "<b>Быстро знакомимся:</b>\n"
+        "• какая у тебя финансовая цель;\n"
+        "• что бесит или ломается в деньгах;\n"
+        "• какие привычки, страхи или хаос надо приручить.\n\n"
+        "Напиши одним сообщением. Честно можно: я не налоговая."
     )
     await state.set_state(AIState.chatting)
     await state.update_data(
@@ -238,7 +257,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(
         intro,
         parse_mode="HTML",
-        reply_markup=_ai_mode_keyboard(AI_MODE_PROFILE),
+        reply_markup=onboarding_finish_keyboard(),
     )
 
 

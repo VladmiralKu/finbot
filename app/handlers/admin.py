@@ -13,6 +13,10 @@ class BroadcastForwardState(StatesGroup):
     waiting_post = State()
 
 
+class WelcomeVoiceState(StatesGroup):
+    waiting_voice = State()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
@@ -38,6 +42,39 @@ async def cmd_admin_stats(message: Message):
         text += "  " + str(tier) + ": " + str(count) + "\n"
 
     await message.answer(text, parse_mode=None)
+
+
+@router.message(Command("setwelcomevoice"))
+async def cmd_set_welcome_voice(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(WelcomeVoiceState.waiting_voice)
+    await message.answer(
+        "Кидай сюда приветственное голосовое. Можно просто переслать его из твоей группы.\n\n"
+        "Я сохраню его для /start. Без лишней возни, как мы любим."
+    )
+
+
+@router.message(WelcomeVoiceState.waiting_voice, F.voice)
+async def msg_set_welcome_voice(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+
+    from app.database import set_bot_setting
+
+    await set_bot_setting("welcome_voice_file_id", message.voice.file_id)
+    await message.answer(
+        "Готово. Теперь /start начинается с твоего голосового.\n\n"
+        "Пользователь услышит тебя первым, а потом уже я начну финансово приставать."
+    )
+
+
+@router.message(WelcomeVoiceState.waiting_voice)
+async def msg_set_welcome_voice_wrong(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("Мне нужно именно голосовое. Текстом харизму не прикрутим.")
 
 
 @router.message(Command("broadcast"))

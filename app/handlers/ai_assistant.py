@@ -147,6 +147,8 @@ async def get_ai_response(
             "Если пользователь рассказал о себе или цели, добавь в конец ответа служебную строку:\n"
             "GOAL: краткое описание цели, контекста и финансовой проблемы пользователя\n"
             "Если информации мало, задай один тёплый уточняющий вопрос и не добавляй GOAL.\n\n"
+            "Стиль в знакомстве: коротко, живо и дерзковато, как Duolingo. Можно мягко поддразнивать, "
+            "но без грубости, стыда и канцелярита.\n\n"
         )
     else:
         mode_prompt = (
@@ -353,7 +355,7 @@ async def process_actions(
                     "INSERT INTO user_goals (user_id, goal_text) VALUES (%s, %s)",
                     (user_id, goal_text)
                 )
-                actions_log += "\nФинансовая цель обновлена!"
+                actions_log += "\nЦель зафиксировал. Теперь деньгам сложнее делать вид, что их не спрашивали."
             except Exception as e:
                 actions_log += "\nОшибка сохранения цели: " + str(e)
         elif action_line.startswith("DELETE_GOAL:"):
@@ -524,10 +526,11 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             allow_transactions=(mode == AI_MODE_ACTION),
             allow_goals=True,
         )
+        from app.keyboards import onboarding_finish_keyboard
         await message.answer(
             "🗣️ " + clean_text + actions_log,
             parse_mode=None,
-            reply_markup=_ai_mode_keyboard(mode)
+            reply_markup=onboarding_finish_keyboard() if mode == AI_MODE_PROFILE else _ai_mode_keyboard(mode)
         )
     except Exception as e:
         await thinking.edit_text("Ошибка: " + str(e))
@@ -583,8 +586,12 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     )
 
     limit_str = "безлимит" if limit >= 9999 else str(used + 1) + "/" + str(limit)
+    answer_text = "🗣️ " + clean_text + actions_log
+    if mode != AI_MODE_PROFILE:
+        answer_text += "\n\n[" + limit_str + "]"
+    from app.keyboards import onboarding_finish_keyboard
     await thinking_msg.edit_text(
-        "🗣️ " + clean_text + actions_log + "\n\n[" + limit_str + "]",
+        answer_text,
         parse_mode=None,
-        reply_markup=_ai_mode_keyboard(mode)
+        reply_markup=onboarding_finish_keyboard() if mode == AI_MODE_PROFILE else _ai_mode_keyboard(mode)
     )

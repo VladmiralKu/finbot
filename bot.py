@@ -94,6 +94,18 @@ async def main():
     try:
         from app.database import execute
         await execute("""
+            CREATE TABLE IF NOT EXISTS bot_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+    except Exception as e:
+        logger.warning("Migration bot_settings: " + str(e))
+
+    try:
+        from app.database import execute
+        await execute("""
             CREATE TABLE IF NOT EXISTS trial_journey_messages (
                 user_id BIGINT NOT NULL,
                 day INT NOT NULL,

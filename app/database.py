@@ -41,6 +41,25 @@ async def fetchall(query, params=None):
         return await cur.fetchall()
 
 
+async def get_bot_setting(setting_key: str) -> str | None:
+    row = await fetchone(
+        "SELECT setting_value FROM bot_settings WHERE setting_key = %s",
+        (setting_key,),
+    )
+    return row[0] if row else None
+
+
+async def set_bot_setting(setting_key: str, setting_value: str):
+    await execute(
+        """INSERT INTO bot_settings (setting_key, setting_value, updated_at)
+           VALUES (%s, %s, NOW())
+           ON CONFLICT (setting_key) DO UPDATE
+           SET setting_value = EXCLUDED.setting_value,
+               updated_at = NOW()""",
+        (setting_key, setting_value),
+    )
+
+
 async def get_or_create_user(user_id, username, full_name, lang="ru"):
     user = await fetchone("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
