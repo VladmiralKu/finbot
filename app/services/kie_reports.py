@@ -78,6 +78,16 @@ def _date_range_from_prompt(user_prompt: str | None, year: int, month: int) -> t
     default_start = date(year, month, 1)
     default_end = _last_day(year, month)
 
+    relative_days = re.search(
+        r"\b(?:за\s+)?последн(?:ие|их|ий|ую)?\s+(\d{1,3})\s+"
+        r"(?:дн(?:я|ей)?|день)\b",
+        lower,
+    )
+    if relative_days:
+        days = max(1, min(120, int(relative_days.group(1))))
+        end = date.today()
+        return end - timedelta(days=days - 1), end
+
     word_range = re.search(
         r"\bс\s+(\d{1,2})\s+([а-яё]+)(?:\s+(20\d{2}))?\s+"
         r"(?:по|до)\s+(\d{1,2})\s+([а-яё]+)(?:\s+(20\d{2}))?",
@@ -153,6 +163,135 @@ def _join_lines(lines: list[str], empty: str = "- нет данных") -> str:
     return "\n".join(lines or [empty])
 
 
+FOCUS_STOP_WORDS = {
+    "должно", "быть", "между", "деньги", "денег", "деньгами", "расход",
+    "расходом", "расходами", "расходов", "поступлениями", "поступление",
+    "поступлений", "только", "тот", "ко", "график", "цифры", "проценты",
+    "процентах", "красивый", "отчет", "отчёт", "последние", "последних",
+    "дней", "дня", "день", "соотношение", "соотношения",
+}
+
+
+def _words(value: str | None) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[а-яёa-z0-9]+", (value or "").lower())
+        if len(word) > 2 and word not in FOCUS_STOP_WORDS
+    }
+
+
+def _extract_expense_focus_words(user_prompt: str | None) -> set[str]:
+    lower = (user_prompt or "").lower()
+    patterns = (
+        r"(?:расход(?:ом|ами|ов|ы|а)?|траты|тратами)\s+на\s+([а-яёa-z0-9 /-]+)",
+        r"(?:расход(?:ом|ами|ов|ы|а)?|траты|тратами)\s+по\s+([а-яёa-z0-9 /-]+)",
+        r"категори[яю]\s+([а-яёa-z0-9 /-]+)",
+    )
+    chunks = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, lower):
+            chunk = match.group(1)
+            chunk = re.split(
+                r"\b(?:должно|только|тот\s+ко|график|цифры|процент|соотнош|за\s+последн|и\s+поступ)\b",
+                chunk,
+                maxsplit=1,
+            )[0]
+            chunks.append(chunk)
+    if chunks:
+        return set().union(*(_words(chunk) for chunk in chunks))
+    return set()
+
+
+def _wants_only_graph(user_prompt: str | None) -> bool:
+    lower = (user_prompt or "").lower()
+    graph_like = "график" in lower or "диаграм" in lower or "визуал" in lower
+    only_like = "только" in lower or "тот ко" in lower or "ток " in lower
+    return graph_like and only_like
+
+
+def _wants_percentages(user_prompt: str | None) -> bool:
+    lower = (user_prompt or "").lower()
+    return "процент" in lower or "%" in lower or "дол" in lower or "соотнош" in lower
+
+
+def _matching_expense_category_names(categories, user_prompt: str | None) -> list[str]:
+    focus_words = _extract_expense_focus_words(user_prompt)
+    if not focus_words:
+        return []
+
+    matches = []
+    for name, tx_type, _total in categories:
+        if tx_type != "expense":
+            continue
+        name_words = _words(str(name))
+        if not name_words:
+            continue
+        overlap = focus_words & name_words
+        if len(overlap) >= min(2, len(focus_words)) or focus_words <= name_words:
+            matches.append(str(name))
+    return matches
+
+
+def _build_focus_block(
+    user_prompt: str | None,
+    summary: dict,
+    categories,
+    daily_rows,
+    category_daily_rows,
+) -> str:
+    focus_names = _matching_expense_category_names(categories, user_prompt)
+    if not focus_names:
+        if _extract_expense_focus_words(user_prompt):
+            return (
+                "Фокус запроса:\n"
+                "- Пользователь просит отдельный расходный срез, но подходящая категория не найдена в данных.\n"
+                "- В отчёте явно покажи: данных по нужной категории нет.\n"
+            )
+        return ""
+
+    focus_name_set = {name.lower() for name in focus_names}
+    focus_total = sum(
+        float(total or 0)
+        for name, tx_type, total in categories
+        if tx_type == "expense" and str(name).lower() in focus_name_set
+    )
+    income_total = float(summary.get("income") or 0)
+    expense_total = float(summary.get("total_expense") or 0)
+    income_ratio = (focus_total / income_total * 100) if income_total else None
+    expense_ratio = (focus_total / expense_total * 100) if expense_total else None
+
+    income_by_day = {row[0]: float(row[1] or 0) for row in daily_rows}
+    focus_by_day = {}
+    for row_date, name, tx_type, total in category_daily_rows:
+        if tx_type == "expense" and str(name).lower() in focus_name_set:
+            focus_by_day[row_date] = focus_by_day.get(row_date, 0.0) + float(total or 0)
+
+    focus_daily_lines = []
+    for day in sorted(set(income_by_day) | set(focus_by_day)):
+        day_income = income_by_day.get(day, 0.0)
+        day_focus = focus_by_day.get(day, 0.0)
+        day_ratio = day_focus / day_income * 100 if day_income else None
+        ratio_text = f"{day_ratio:.1f}%" if day_ratio is not None else "нет поступлений"
+        focus_daily_lines.append(
+            f"- {_date_label(day)}: поступления {_rub(day_income)}, "
+            f"{', '.join(focus_names)} {_rub(day_focus)}, доля {ratio_text}"
+        )
+
+    income_ratio_text = f"{income_ratio:.1f}%" if income_ratio is not None else "нет поступлений"
+    expense_ratio_text = f"{expense_ratio:.1f}%" if expense_ratio is not None else "нет расходов"
+    return (
+        "Фокус запроса, использовать как главный и единственный смысл отчёта:\n"
+        f"- Сравниваем все поступления денег и расход на: {', '.join(focus_names)}.\n"
+        f"- Поступления за период: {_rub(income_total)}.\n"
+        f"- Расход на {', '.join(focus_names)}: {_rub(focus_total)}.\n"
+        f"- Расход на {', '.join(focus_names)} / поступления: {income_ratio_text}.\n"
+        f"- Расход на {', '.join(focus_names)} / все расходы: {expense_ratio_text}.\n"
+        "Динамика фокуса по дням:\n"
+        + _join_lines(focus_daily_lines)
+        + "\n"
+    )
+
+
 async def _period_summary(user_id: int, start_date: date, end_date: date) -> dict:
     from app.database import fetchall
 
@@ -179,7 +318,8 @@ def is_default_beautiful_report_request(user_prompt: str | None) -> bool:
         "график", "диаграм", "соотнош", "сравн", "сравни", "только", "без ",
         "убери", "добавь", "пики", "пик ", "лучших дней", "котик", "котиков",
         "закуп", "зарплат", "выруч", "поступлен", "категор", "кусок", "часть",
-        "в виде", "по дням", "по недел", "отдельно",
+        "в виде", "по дням", "по недел", "отдельно", "последн", "процент",
+        "возврат", "долг",
     )
     return not any(marker in lower for marker in custom_markers)
 
@@ -197,6 +337,8 @@ def describe_report_plan(
         focus.append("сравнение и доли между указанными категориями/доходами")
     if "график" in lower or "динамик" in lower or "поступлен" in lower:
         focus.append("график динамики по периоду")
+    if _wants_only_graph(user_prompt):
+        focus.append("только график и процентные цифры, без таблиц и лишних блоков")
     if "пики" in lower or "лучших дней" in lower or "выруч" in lower:
         focus.append("пики лучших дней и заметные всплески")
     if "котик" in lower or "котиков" in lower:
@@ -234,7 +376,7 @@ async def build_report_prompt(
            WHERE t.user_id=%s AND t.transaction_date BETWEEN %s AND %s
            GROUP BY c.name, t.type
            ORDER BY 3 DESC
-           LIMIT 16""",
+           LIMIT 80""",
         (user_id, start_date, end_date),
     )
     daily_rows = await fetchall(
@@ -267,6 +409,15 @@ async def build_report_prompt(
            LIMIT 35""",
         (user_id, start_date, end_date),
     )
+    category_daily_rows = await fetchall(
+        """SELECT t.transaction_date, COALESCE(c.name, 'Без категории'), t.type, SUM(t.amount)
+           FROM transactions t
+           LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id=%s AND t.transaction_date BETWEEN %s AND %s
+           GROUP BY t.transaction_date, c.name, t.type
+           ORDER BY t.transaction_date, c.name""",
+        (user_id, start_date, end_date),
+    )
     notes = []
     if _wants_notes(user_prompt):
         notes = await fetchall(
@@ -276,7 +427,7 @@ async def build_report_prompt(
 
     category_lines = [
         f"- {row[0]} ({'доход' if row[1] == 'income' else 'расход'}): {_rub(row[2])}"
-        for row in categories
+        for row in categories[:16]
     ]
     daily_lines = [
         f"- {_date_label(row[0])}: поступления {_rub(row[1])}, расходы {_rub(row[2])}, операций {row[3]}"
@@ -302,6 +453,41 @@ async def build_report_prompt(
     note_lines = [
         f"- {_date_label(row[1])}: {_short(row[0], 120)}" for row in notes
     ]
+    focus_block = _build_focus_block(user_prompt, summary, categories, daily_rows, category_daily_rows)
+    only_graph = _wants_only_graph(user_prompt)
+    wants_percentages = _wants_percentages(user_prompt)
+
+    strict_layout_rules = []
+    if only_graph:
+        strict_layout_rules.extend([
+            "- СТРОГО: сделай только один график/диаграмму и крупные процентные цифры.",
+            "- НЕ добавляй карточки с общим итогом, последние операции, категории, помесячные таблицы, выводы и декоративные блоки.",
+            "- Заголовок должен отражать конкретный запрос, а не общий 'Финансовый отчёт'.",
+        ])
+    if wants_percentages:
+        strict_layout_rules.append("- Обязательно покажи проценты крупно: доля выбранного расхода от поступлений и, если уместно, от всех расходов.")
+    if focus_block:
+        strict_layout_rules.append("- Фокус запроса важнее всех общих данных. Если данные ниже противоречат фокусу, используй фокус.")
+    strict_layout_text = "\n".join(strict_layout_rules)
+
+    if only_graph:
+        return (
+            "Создай финальную визуальную финансовую мини-инфографику для Telegram на русском языке. "
+            "Это не общий отчёт, а узкий график по конкретной просьбе пользователя.\n\n"
+            "Главная просьба пользователя:\n"
+            f"{requested}\n\n"
+            "Жёсткие правила макета:\n"
+            + strict_layout_text
+            + "\n- Не раскрывай внутренние сервисы, API, провайдеров и технические детали.\n"
+            "- Не добавляй вымышленные цифры. Используй только данные ниже.\n\n"
+            f"Период данных: {_date_label(start_date)} - {_date_label(end_date)}\n"
+            f"Итого поступления: {_rub(summary['income'])}\n"
+            f"Итого расходы: {_rub(summary['total_expense'])}\n"
+            f"Итог периода: {_rub(summary['balance'])}\n\n"
+            + focus_block
+            + "\nДневная динамика всего периода:\n"
+            + _join_lines(daily_lines)
+        )
 
     return (
         "Создай финальный визуальный финансовый отчёт для Telegram на русском языке. "
@@ -313,7 +499,8 @@ async def build_report_prompt(
         "Главная просьба пользователя:\n"
         f"{requested}\n\n"
         "Правила:\n"
-        "- Выполни именно просьбу пользователя: он может просить график, сравнение, один блок, исключение блоков или необычный визуальный стиль.\n"
+        + (strict_layout_text + "\n" if strict_layout_text else "")
+        + "- Выполни именно просьбу пользователя: он может просить график, сравнение, один блок, исключение блоков или необычный визуальный стиль.\n"
         "- Регулярные платежи и календарь платежей не показывай в отчёте: они используются только как напоминания.\n"
         "- По умолчанию не используй заметки и финансовые цели. Заметки можно использовать только если пользователь явно попросил.\n"
         "- Не дели расходы на внутренние типы. Все расходы показывай как обычные расходы или по категориям.\n"
@@ -325,7 +512,8 @@ async def build_report_prompt(
         f"Итого поступления: {_rub(summary['income'])}\n"
         f"Итого расходы: {_rub(summary['total_expense'])}\n"
         f"Итог периода: {_rub(summary['balance'])}\n\n"
-        "Категории и статьи:\n" + _join_lines(category_lines) + "\n\n"
+        + (focus_block + "\n" if focus_block else "")
+        + "Категории и статьи:\n" + _join_lines(category_lines) + "\n\n"
         "Помесячное сравнение:\n" + _join_lines(monthly_lines) + "\n\n"
         "Дневная динамика:\n" + _join_lines(daily_lines) + "\n\n"
         "Пики поступлений:\n" + _join_lines(income_peak_lines) + "\n\n"
