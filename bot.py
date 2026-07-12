@@ -112,6 +112,14 @@ async def main():
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_started_at TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_until TIMESTAMP")
         await execute("""
+            UPDATE users
+            SET paid_until = premium_until
+            WHERE paid_until IS NULL
+              AND premium_until IS NOT NULL
+              AND COALESCE(subscription_tier, 'free') <> 'free'
+              AND premium_until::date > created_at::date + 10
+        """)
+        await execute("""
             CREATE TABLE IF NOT EXISTS paid_expiry_reminders (
                 user_id BIGINT NOT NULL,
                 paid_until_date DATE NOT NULL,
