@@ -194,19 +194,14 @@ async def apply_category_command(user_id: int, command: dict, scope_type: str) -
 
     if intent == "set_category_kind":
         if scope_type == "income":
-            return "Доходные категории не бывают постоянными или переменными расходами."
+            return "Доходные категории не делятся на дополнительные типы."
         name = _clean_name(command.get("category_name", ""))
         existing = await _find_category(user_id, name, scope_type)
         if not existing:
             return f"Категория «{name}» не найдена."
-        kind = command.get("kind")
-        if kind not in ("fixed", "variable"):
-            return "Не понял, сделать категорию постоянной или переменной."
-        await execute(
-            "UPDATE categories SET kind=%s WHERE user_id=%s AND id=%s AND type='expense'",
-            (kind, user_id, existing["id"]),
+        return (
+            "Это деление в категориях убрали. "
+            "Если платёж повторяется, добавь его в платёжный календарь — я буду просто напоминать."
         )
-        label = "постоянный расход" if kind == "fixed" else "переменный расход"
-        return f"Готово: «{existing['name']}» теперь {label}."
 
     return "Не понял команду. Можно выбрать категорию кнопкой или написать: «замени категорию X на Y»."

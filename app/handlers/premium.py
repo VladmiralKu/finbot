@@ -68,6 +68,7 @@ def premium_keyboard(tier):
         ]
     elif tier == 'scan_text':
         buttons = [
+            [InlineKeyboardButton(text="📝 Продлить Скан и текст", callback_data="tier_scan_text")],
             [InlineKeyboardButton(text="⭐ База — 290 руб (196 ⭐)", callback_data="tier_base")],
             [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
@@ -77,6 +78,8 @@ def premium_keyboard(tier):
         ]
     elif tier == 'base':
         buttons = [
+            [InlineKeyboardButton(text="⭐ Продлить Базу", callback_data="tier_base")],
+            [InlineKeyboardButton(text="📝 Скан и текст после Базы", callback_data="tier_scan_text")],
             [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
             [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
@@ -85,6 +88,9 @@ def premium_keyboard(tier):
         ]
     elif tier == 'premium':
         buttons = [
+            [InlineKeyboardButton(text="💎 Продлить Премиум", callback_data="tier_premium")],
+            [InlineKeyboardButton(text="⭐ База после Премиума", callback_data="tier_base")],
+            [InlineKeyboardButton(text="📝 Скан и текст после Премиума", callback_data="tier_scan_text")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -139,6 +145,25 @@ def payment_keyboard(tier, months):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _date_label(value) -> str:
+    return value.strftime("%d.%m.%Y") if value else "позже"
+
+
+def _payment_success_text(tier_name: str, months: int, activation: dict) -> str:
+    status = activation.get("status")
+    until = _date_label(activation.get("until"))
+    starts_at = _date_label(activation.get("starts_at"))
+    if status == "queued":
+        return (
+            f"Оплата прошла! Тариф {tier_name} на {months} мес. поставил в очередь.\n\n"
+            f"Он стартует {starts_at}, когда закончится текущий тариф, и будет работать до {until}. "
+            "Дни не сгорают. Наконец-то деньги ведут себя прилично."
+        )
+    if status == "extended":
+        return f"Оплата прошла! Тариф {tier_name} продлён до {until}. Дни не сгорели, всё по-взрослому."
+    return f"Оплата прошла! Тариф {tier_name} активирован до {until}. Спасибо!"
+
+
 @router.callback_query(F.data == "premium")
 async def cb_premium(call: CallbackQuery):
     tier = await get_subscription_tier(call.from_user.id)
@@ -171,6 +196,7 @@ async def cb_premium(call: CallbackQuery):
             "У тебя активен тариф Скан и текст!\n\n"
             "Доступно: текстовый ввод, чеки, отчёты, ИИ (60 сообщений/мес)\n"
             "Голосовой ввод недоступен на этом тарифе\n\n"
+            "Можно продлить заранее — оплаченные дни не сгорят.\n\n"
             "Upgrade до Премиум — голос, безлимитный ИИ, свободные беседы + Excel за 800 руб/мес\n\n"
             "Или купи Бустер +80 сообщений за 100 руб"
         )
@@ -178,6 +204,7 @@ async def cb_premium(call: CallbackQuery):
         text = (
             "У тебя активен тариф База!\n\n"
             "Доступно: голос, чеки, отчёты, ИИ (150 сообщений/мес)\n\n"
+            "Можно продлить заранее или поставить тариф ниже следующим — дни не сгорят.\n\n"
             "Upgrade до Премиум — безлимитный ИИ, свободные беседы + Excel за 800 руб/мес\n\n"
             "Или купи Бустер +80 сообщений за 100 руб"
         )
@@ -185,6 +212,7 @@ async def cb_premium(call: CallbackQuery):
         text = (
             "У тебя активен Премиум!\n\n"
             "Доступно всё включая безлимитный ИИ, свободные беседы на любые темы и Excel.\n"
+            "Можно продлить заранее или поставить следующий тариф после Премиума.\n"
             "Спасибо за поддержку!"
         )
     else:
@@ -388,10 +416,10 @@ async def successful_payment(message: Message):
     months = int(parts[-1])
     days = months * 30
 
-    await activate_stars_payment(message.from_user.id, tier=tier, days=days)
+    activation = await activate_stars_payment(message.from_user.id, tier=tier, days=days)
     tier_name = TIER_NAMES.get(tier, tier)
     await message.answer(
-        f"Оплата прошла! Тариф {tier_name} активирован на {months} мес. Спасибо!",
+        _payment_success_text(tier_name, months, activation),
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")]

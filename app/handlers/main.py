@@ -41,6 +41,10 @@ class QuickCategoryRenameState(StatesGroup):
     waiting_new_name = State()
 
 
+class BeautifulReportState(StatesGroup):
+    waiting_confirm = State()
+
+
 NO_SPEND_REPLIES = {
     "ничего",
     "ничего не тратил",
@@ -578,12 +582,11 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
     )
     await state.clear()
     sign = "−" if data["tx_type"] == "expense" else "+"
-    kind_label = {"fixed": "постоянный", "variable": "переменный", "income": "доход"}.get(data["kind"], "")
     tx_date = data.get("transaction_date") or date.today()
     category_name = data.get("category_name") or "выбранная категория"
     text = (
         f"✅ Записано!\n\n"
-        f"{sign}{data['amount']:,.0f} ₽  •  {kind_label}\n"
+        f"{sign}{data['amount']:,.0f} ₽\n"
         f"📂 {category_name}\n"
         f"📅 {tx_date.strftime('%d.%m.%Y')}\n"
         f"{_format_comment_block(comment)}"
@@ -666,26 +669,6 @@ async def render_month_report(user_id: int, year: int, month: int):
         for name, total in sorted_cats:
             pct = (total / pct_base * 100) if pct_base else 0
             text += f"  🛒 {name}: {total:,.0f} ₽ ({pct:.0f}%)\n"
-
-    planned_rows = await fetchall(
-        """SELECT name, amount, amount_is_approximate, next_trigger_date
-           FROM recurring_payments
-           WHERE user_id=%s
-             AND is_active=TRUE
-             AND type='expense'
-             AND EXTRACT(YEAR FROM next_trigger_date)=%s
-             AND EXTRACT(MONTH FROM next_trigger_date)=%s
-           ORDER BY next_trigger_date, name""",
-        (user_id, year, month),
-    )
-    if planned_rows:
-        planned_total = sum(float(row[1] or 0) for row in planned_rows)
-        text += "\n🗓 <b>Планируемые расходы:</b>\n"
-        text += f"  Итого: {planned_total:,.0f} ₽\n"
-        for name, amount, is_approx, next_date in planned_rows:
-            approx = "~" if is_approx else ""
-            text += f"  {next_date.strftime('%d.%m')} — {name}: {approx}{float(amount or 0):,.0f} ₽\n"
-        text += "  <i>Не участвуют в формуле остатка ДС.</i>\n"
 
     # Добавляем % к остатку
     text = text.replace(
@@ -1094,6 +1077,140 @@ async def cb_kie_report_ready(call: CallbackQuery):
         asyncio.create_task(_wait_and_send_beautiful_report(call.bot, call.message.chat.id, task_id))
 
 
+def _beautiful_report_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Сформировать", callback_data="beautiful_report_generate")],
+        [InlineKeyboardButton(text="Отмена", callback_data="beautiful_report_cancel")],
+    ])
+
+
+async def _start_beautiful_report_generation(
+    message: Message,
+    state: FSMContext,
+    user_id: int,
+    year: int,
+    month: int,
+    user_prompt: str,
+):
+    from app.database import get_user_tier
+    from app.services.kie_reports import start_beautiful_report
+
+    tier = await get_user_tier(user_id)
+    if tier == "free":
+        await state.clear()
+        await message.answer(
+            "Красивые отчёты доступны на платных тарифах.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    thinking = await message.answer("Собираю данные и запускаю красивый отчёт...")
+    try:
+        result = await start_beautiful_report(user_id, year, month, user_prompt)
+        await state.clear()
+        await thinking.edit_text(
+            "Принял. Собираю красивый отчёт и пришлю картинку сюда, когда она будет готова.\n\n"
+            "Обычно это занимает около минуты.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(year) + ":" + str(month))],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        asyncio.create_task(_wait_and_send_beautiful_report(message.bot, message.chat.id, result["task_id"]))
+    except Exception:
+        await state.clear()
+        await thinking.edit_text(
+            "Не смог запустить красивый отчёт. Проверь настройки генерации отчётов или попробуй позже.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(year) + ":" + str(month))],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+
+
+@router.callback_query(F.data == "beautiful_report_generate")
+async def cb_beautiful_report_generate(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    report_data = data.get("beautiful_report") or {}
+    year = report_data.get("year")
+    month = report_data.get("month")
+    user_prompt = report_data.get("user_prompt") or "Сделай красивый финансовый отчёт."
+    if not year or not month:
+        await state.clear()
+        await call.message.answer(
+            "Не нашёл параметры отчёта. Запроси красивый отчёт ещё раз.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+    await _start_beautiful_report_generation(
+        call.message,
+        state,
+        call.from_user.id,
+        int(year),
+        int(month),
+        user_prompt,
+    )
+
+
+@router.callback_query(F.data == "beautiful_report_cancel")
+async def cb_beautiful_report_cancel(call: CallbackQuery, state: FSMContext):
+    await call.answer("Отменил")
+    await state.clear()
+    await call.message.edit_text(
+        "Ок, красивый отчёт не запускаю.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
+@router.message(BeautifulReportState.waiting_confirm, F.text)
+async def msg_beautiful_report_refine(message: Message, state: FSMContext):
+    from app.services.kie_reports import describe_report_plan
+
+    data = await state.get_data()
+    report_data = data.get("beautiful_report") or {}
+    year = int(report_data.get("year") or datetime.now().year)
+    month = int(report_data.get("month") or datetime.now().month)
+    previous_prompt = report_data.get("user_prompt") or "Сделай красивый финансовый отчёт."
+    lower = (message.text or "").lower().strip()
+    if lower in ("отмена", "отмени", "назад", "завершить", "стоп"):
+        await state.clear()
+        await message.answer(
+            "Ок, красивый отчёт не запускаю.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+    if lower in ("сформировать", "формируй", "запускай", "да", "ок"):
+        await _start_beautiful_report_generation(
+            message,
+            state,
+            message.from_user.id,
+            year,
+            month,
+            previous_prompt,
+        )
+        return
+    updated_prompt = previous_prompt + "\nУточнение: " + (message.text or "").strip()
+    await state.update_data(beautiful_report={
+        "year": year,
+        "month": month,
+        "user_prompt": updated_prompt,
+    })
+    await message.answer(
+        describe_report_plan(year, month, updated_prompt),
+        reply_markup=_beautiful_report_confirm_keyboard(),
+    )
+
+
 # --- Быстрый ввод ---
 
 @router.message(F.text.regexp(r'^[+-]?\d+(?![.\d])'), StateFilter(default_state))
@@ -1270,8 +1387,7 @@ async def cb_dashboard(call: CallbackQuery):
     text = (
         f"Табло управленца — {MONTHS[now.month]} {now.year}\n\n"
         f"Выручка: {d['income']:,.0f} руб.\n"
-        f"Прямые расходы: -{d['variable_expense']:,.0f} руб.\n"
-        f"Косвенные расходы: -{d['fixed_expense']:,.0f} руб.\n\n"
+        f"Расходы: -{d['total_expense']:,.0f} руб.\n\n"
         f"EBITDA: {d['ebitda']:,.0f} руб."
     )
 
@@ -1769,18 +1885,10 @@ async def cb_pnl_report(call: CallbackQuery):
     for name, total in d['income_cats']:
         text += f"  {name}: {total:,.0f} ({pct(total)})\n"
 
-    # Прямые (переменные)
-    text += f"\nПЕРЕМЕННЫЕ РАСХОДЫ: -{d['variable']:,.0f} ({pct(d['variable'])})\n"
-    for name, total in d['variable_cats']:
-        text += f"  {name}: -{total:,.0f} ({pct(total)})\n"
-
-    # Валовая прибыль
-    gp_icon = "+" if d['gross_profit'] >= 0 else ""
-    text += f"\nМаржинальная прибыль: {gp_icon}{d['gross_profit']:,.0f} ({pct(d['gross_profit'])})\n"
-
-    # Косвенные (постоянные)
-    text += f"\nПОСТОЯННЫЕ РАСХОДЫ: -{d['fixed']:,.0f} ({pct(d['fixed'])})\n"
-    for name, total in d['fixed_cats']:
+    expense_total = d['variable'] + d['fixed']
+    expense_cats = sorted(d['variable_cats'] + d['fixed_cats'], key=lambda item: item[1], reverse=True)
+    text += f"\nРАСХОДЫ: -{expense_total:,.0f} ({pct(expense_total)})\n"
+    for name, total in expense_cats:
         text += f"  {name}: -{total:,.0f} ({pct(total)})\n"
 
     # EBITDA
@@ -1879,9 +1987,9 @@ async def cb_export_all(call: CallbackQuery):
     # 1. Транзакции
     ws1 = wb.active
     ws1.title = "Транзакции"
-    ws1.append(["ID", "Сумма", "Тип", "Вид", "Категория", "Комментарий", "Дата", "Создано"])
+    ws1.append(["ID", "Сумма", "Тип", "Категория", "Комментарий", "Дата", "Создано"])
     rows = await fetchall("""
-        SELECT t.id, t.amount, t.type, t.kind, c.name as category,
+        SELECT t.id, t.amount, t.type, c.name as category,
                t.comment, t.transaction_date, t.created_at
         FROM transactions t
         LEFT JOIN categories c ON t.category_id = c.id
@@ -1889,15 +1997,14 @@ async def cb_export_all(call: CallbackQuery):
         ORDER BY t.transaction_date DESC
     """, (call.from_user.id,))
     for r in rows:
-        ws1.append([r[0], float(r[1]), r[2], r[3],
-                    r[4], r[5], str(r[6]), str(r[7])])
+        ws1.append([r[0], float(r[1]), r[2], r[3], r[4], str(r[5]), str(r[6])])
 
     # 2. Категории
     ws2 = wb.create_sheet("Категории")
-    ws2.append(["ID", "Название", "Тип", "Вид"])
-    cats = await fetchall("SELECT id, name, type, kind FROM categories WHERE user_id = %s", (call.from_user.id,))
+    ws2.append(["ID", "Название", "Тип"])
+    cats = await fetchall("SELECT id, name, type FROM categories WHERE user_id = %s", (call.from_user.id,))
     for r in cats:
-        ws2.append([r[0], r[1], r[2], r[3]])
+        ws2.append([r[0], r[1], r[2]])
 
     # 3. Заметки
     ws3 = wb.create_sheet("Заметки")
@@ -1979,7 +2086,7 @@ BOT_KNOWLEDGE = """
 📝 ЗАМЕТКИ
 - Кнопка "Заметки" → текстовые заметки, не привязанные к транзакциям
 
-🔁 ПОСТОЯННЫЕ РАСХОДЫ
+🔁 РЕГУЛЯРНЫЕ ПЛАТЕЖИ
 - Настрой регулярные платежи (аренда, подписки)
 - В день платежа бот напомнит и спросит оплачено ли
 
@@ -2028,7 +2135,7 @@ async def cmd_help(message: Message):
         "🤖 ИИ-помощник — бюджет, план, финансовые вопросы, цели; на Премиум — свободные беседы на любые темы\n"
         "🧾 Чеки — отправь фото чека, сумма распознается автоматически\n"
         "📝 Заметки — база фактов для ИИ: он видит заметки и использует их для отчётов, планов и анализа\n"
-        "🔁 Постоянные расходы — регулярные платежи с напоминаниями\n\n"
+        "🔁 Регулярные платежи — календарь платежей с напоминаниями\n\n"
         "🎙 Голосовой ввод\n"
         "Операции можно вносить голосом из любого места бота.\n"
         "Примеры: \"кофе 250, такси 700\", \"получил зарплату 50000\", \"продукты 3200 и аренда 30000\".\n"
@@ -2154,45 +2261,32 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         return True
 
     if name == "beautiful_report":
-        from app.database import get_user_tier
-        from app.services.kie_reports import start_beautiful_report
+        from app.services.kie_reports import describe_report_plan, is_default_beautiful_report_request
 
-        tier = await get_user_tier(message.from_user.id)
-        if tier == "free":
-            await message.answer(
-                "Красивые отчёты доступны на платных тарифах.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ]),
+        user_prompt = params.get("user_prompt") or text
+        year = int(params["year"])
+        month = int(params["month"])
+        if is_default_beautiful_report_request(user_prompt):
+            await _start_beautiful_report_generation(
+                message,
+                state,
+                message.from_user.id,
+                year,
+                month,
+                user_prompt,
             )
             return True
 
-        thinking = await message.answer("Собираю данные и запускаю красивый отчёт...")
-        try:
-            result = await start_beautiful_report(
-                message.from_user.id,
-                int(params["year"]),
-                int(params["month"]),
-                params.get("user_prompt") or text,
-            )
-            await thinking.edit_text(
-                "Принял. Собираю красивый отчёт и пришлю картинку сюда, когда она будет готова.\n\n"
-                "Обычно это занимает около минуты.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ]),
-            )
-            asyncio.create_task(_wait_and_send_beautiful_report(message.bot, message.chat.id, result["task_id"]))
-        except Exception as e:
-            await thinking.edit_text(
-                "Не смог запустить красивый отчёт. Проверь настройки генерации отчётов или попробуй позже.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="Обычный отчёт", callback_data="report:" + str(params["year"]) + ":" + str(params["month"]))],
-                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-                ]),
-            )
+        await state.set_state(BeautifulReportState.waiting_confirm)
+        await state.update_data(beautiful_report={
+            "year": year,
+            "month": month,
+            "user_prompt": user_prompt,
+        })
+        await message.answer(
+            describe_report_plan(year, month, user_prompt),
+            reply_markup=_beautiful_report_confirm_keyboard(),
+        )
         return True
 
     if name == "show_recent":
@@ -2280,7 +2374,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         await message.answer(
             f"Добавил в платёжный календарь:\n"
             f"{parsed['name']} — {parsed['amount']:,.0f} ₽, {repeat_text}.\n\n"
-            "Теперь это попадёт в планируемые расходы ДДС.",
+            "Теперь буду напоминать об этом платеже заранее.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Открыть календарь", callback_data="calendar")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],

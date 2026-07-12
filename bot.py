@@ -105,6 +105,34 @@ async def main():
 
     try:
         from app.database import execute
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_until TIMESTAMP")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_tier VARCHAR(50)")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_until TIMESTAMP")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_is_paid BOOLEAN DEFAULT FALSE")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_started_at TIMESTAMP")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_until TIMESTAMP")
+        await execute("""
+            CREATE TABLE IF NOT EXISTS paid_expiry_reminders (
+                user_id BIGINT NOT NULL,
+                paid_until_date DATE NOT NULL,
+                sent_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, paid_until_date)
+            )
+        """)
+        await execute("""
+            CREATE TABLE IF NOT EXISTS subscription_bonus_messages (
+                user_id BIGINT NOT NULL,
+                bonus_start_date DATE NOT NULL,
+                day INT NOT NULL,
+                sent_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (user_id, bonus_start_date, day)
+            )
+        """)
+    except Exception as e:
+        logger.warning("Migration subscription lifecycle: " + str(e))
+
+    try:
+        from app.database import execute
         await execute("""
             CREATE TABLE IF NOT EXISTS trial_journey_messages (
                 user_id BIGINT NOT NULL,

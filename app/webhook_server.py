@@ -55,8 +55,15 @@ async def yookassa_webhook(request):
 
             if user_id and tier:
                 days = months * 30
-                await activate_stars_payment(int(user_id), tier=tier, days=days)
-                logger.info(f"YooKassa: activated {tier} {months}mo for user {user_id} (payment {payment_id} verified)")
+                activation = await activate_stars_payment(int(user_id), tier=tier, days=days)
+                logger.info(
+                    "YooKassa: %s %s %smo for user %s (payment %s verified)",
+                    activation.get("status", "activated"),
+                    tier,
+                    months,
+                    user_id,
+                    payment_id,
+                )
 
         return web.Response(status=200, text="OK")
     except Exception as e:

@@ -25,7 +25,6 @@ REPORT_MONTHS = (
 )
 NOTE_EXCLUDE_MARKERS = ("без замет", "убери замет", "не добавляй замет", "не показывай замет")
 NOTE_INCLUDE_MARKERS = ("с замет", "добавь замет", "учти замет", "используй замет", "по замет")
-PLANNED_EXCLUDE_MARKERS = ("без планов", "без планир", "без постоян", "без регуляр", "без подпис")
 TEXT_LIMIT = 90
 
 
@@ -150,11 +149,6 @@ def _wants_notes(user_prompt: str | None) -> bool:
     return any(marker in lower for marker in NOTE_INCLUDE_MARKERS)
 
 
-def _wants_planned(user_prompt: str | None) -> bool:
-    lower = (user_prompt or "").lower()
-    return not any(marker in lower for marker in PLANNED_EXCLUDE_MARKERS)
-
-
 def _join_lines(lines: list[str], empty: str = "- нет данных") -> str:
     return "\n".join(lines or [empty])
 
@@ -163,23 +157,63 @@ async def _period_summary(user_id: int, start_date: date, end_date: date) -> dic
     from app.database import fetchall
 
     rows = await fetchall(
-        """SELECT type, kind, SUM(amount)
+        """SELECT type, SUM(amount)
            FROM transactions
            WHERE user_id=%s AND transaction_date BETWEEN %s AND %s
-           GROUP BY type, kind""",
+           GROUP BY type""",
         (user_id, start_date, end_date),
     )
-    result = {"income": 0.0, "expense_fixed": 0.0, "expense_variable": 0.0}
+    result = {"income": 0.0, "total_expense": 0.0}
     for row in rows:
         if row[0] == "income":
-            result["income"] += float(row[2] or 0)
-        elif row[0] == "expense" and row[1] == "fixed":
-            result["expense_fixed"] += float(row[2] or 0)
+            result["income"] += float(row[1] or 0)
         elif row[0] == "expense":
-            result["expense_variable"] += float(row[2] or 0)
-    result["total_expense"] = result["expense_fixed"] + result["expense_variable"]
+            result["total_expense"] += float(row[1] or 0)
     result["balance"] = result["income"] - result["total_expense"]
     return result
+
+
+def is_default_beautiful_report_request(user_prompt: str | None) -> bool:
+    lower = (user_prompt or "").lower()
+    custom_markers = (
+        "график", "диаграм", "соотнош", "сравн", "сравни", "только", "без ",
+        "убери", "добавь", "пики", "пик ", "лучших дней", "котик", "котиков",
+        "закуп", "зарплат", "выруч", "поступлен", "категор", "кусок", "часть",
+        "в виде", "по дням", "по недел", "отдельно",
+    )
+    return not any(marker in lower for marker in custom_markers)
+
+
+def describe_report_plan(
+    year: int,
+    month: int,
+    user_prompt: str | None = None,
+) -> str:
+    requested = _short(user_prompt or "Сделай красивый финансовый отчёт.", 700)
+    start_date, end_date = _date_range_from_prompt(user_prompt, year, month)
+    lower = (user_prompt or "").lower()
+    focus = []
+    if "соотнош" in lower or "сравн" in lower:
+        focus.append("сравнение и доли между указанными категориями/доходами")
+    if "график" in lower or "динамик" in lower or "поступлен" in lower:
+        focus.append("график динамики по периоду")
+    if "пики" in lower or "лучших дней" in lower or "выруч" in lower:
+        focus.append("пики лучших дней и заметные всплески")
+    if "котик" in lower or "котиков" in lower:
+        focus.append("визуальная подача в стиле запроса, но цифры останутся читаемыми")
+    if not focus:
+        focus.append("визуализация именно по твоему описанию")
+
+    return (
+        "Перед генерацией соберу отчёт так:\n\n"
+        f"• Период: {_date_label(start_date)} — {_date_label(end_date)}\n"
+        f"• Задача: {requested}\n"
+        "• В отчёте будут: " + "; ".join(focus) + "\n"
+        "• Базовые цифры: поступления, расходы, итог периода и нужные сравнения\n"
+        "• Заметки и финансовую цель не добавляю, если ты прямо не попросишь\n"
+        "• Регулярные платежи не включаю в отчёт: они остаются только напоминаниями\n\n"
+        "Если всё ок — жми «Сформировать». Если хочешь поправить ТЗ, просто напиши следующим сообщением."
+    )
 
 
 async def build_report_prompt(
@@ -194,12 +228,12 @@ async def build_report_prompt(
     start_date, end_date = _date_range_from_prompt(user_prompt, year, month)
     summary = await _period_summary(user_id, start_date, end_date)
     categories = await fetchall(
-        """SELECT COALESCE(c.name, 'Без категории'), c.kind, t.type, SUM(t.amount)
+        """SELECT COALESCE(c.name, 'Без категории'), t.type, SUM(t.amount)
            FROM transactions t
            LEFT JOIN categories c ON t.category_id = c.id
            WHERE t.user_id=%s AND t.transaction_date BETWEEN %s AND %s
-           GROUP BY c.name, c.kind, t.type
-           ORDER BY 4 DESC
+           GROUP BY c.name, t.type
+           ORDER BY 3 DESC
            LIMIT 16""",
         (user_id, start_date, end_date),
     )
@@ -233,19 +267,6 @@ async def build_report_prompt(
            LIMIT 35""",
         (user_id, start_date, end_date),
     )
-    planned_rows = []
-    if _wants_planned(user_prompt):
-        planned_rows = await fetchall(
-            """SELECT name, amount, amount_is_approximate, next_trigger_date
-               FROM recurring_payments
-               WHERE user_id=%s
-                 AND is_active=TRUE
-                 AND type='expense'
-                 AND next_trigger_date BETWEEN %s AND %s
-               ORDER BY next_trigger_date, name
-               LIMIT 12""",
-            (user_id, start_date, end_date),
-        )
     notes = []
     if _wants_notes(user_prompt):
         notes = await fetchall(
@@ -254,7 +275,7 @@ async def build_report_prompt(
         )
 
     category_lines = [
-        f"- {row[0]} ({'доход' if row[2] == 'income' else 'расход'}): {_rub(row[3])}"
+        f"- {row[0]} ({'доход' if row[1] == 'income' else 'расход'}): {_rub(row[2])}"
         for row in categories
     ]
     daily_lines = [
@@ -278,10 +299,6 @@ async def build_report_prompt(
         direction = "доход" if row[2] == "income" else "расход"
         comment = f"; комментарий: {_short(row[4], 70)}" if row[4] else ""
         transaction_lines.append(f"- {_date_label(row[0])}: {direction} {_rub(row[1])}, {row[3]}{comment}")
-    planned_lines = [
-        f"- {_date_label(row[3])}: {row[0]} {'~' if row[2] else ''}{_rub(row[1])}"
-        for row in planned_rows
-    ]
     note_lines = [
         f"- {_date_label(row[1])}: {_short(row[0], 120)}" for row in notes
     ]
@@ -291,12 +308,15 @@ async def build_report_prompt(
         "Это должен быть готовый красивый экран/инфографика, а не объяснение процесса. "
         "Стиль по умолчанию: чистый современный fintech-дизайн, светлый фон, зелёные и графитовые акценты, "
         "крупные цифры, аккуратные карточки, читаемые подписи.\n\n"
+        "Если пользователь не попросил другой тип графика, главный график сделай в виде финансовых свечей по дням: "
+        "зелёные свечи для дней с плюсом, красные для дней с минусом, рядом подпиши поступления, расходы и итог.\n\n"
         "Главная просьба пользователя:\n"
         f"{requested}\n\n"
         "Правила:\n"
         "- Выполни именно просьбу пользователя: он может просить график, сравнение, один блок, исключение блоков или необычный визуальный стиль.\n"
-        "- Если пользователь просит убрать заметки, плановые платежи или другой блок, не показывай этот блок.\n"
+        "- Регулярные платежи и календарь платежей не показывай в отчёте: они используются только как напоминания.\n"
         "- По умолчанию не используй заметки и финансовые цели. Заметки можно использовать только если пользователь явно попросил.\n"
+        "- Не дели расходы на внутренние типы. Все расходы показывай как обычные расходы или по категориям.\n"
         "- Можно использовать метафоры и оформление из просьбы пользователя, например котиков, но цифры должны остаться читаемыми.\n"
         "- Не раскрывай внутренние сервисы, API, провайдеров и технические детали.\n"
         "- Не добавляй вымышленные цифры. Используй только данные ниже.\n"
@@ -304,16 +324,13 @@ async def build_report_prompt(
         f"Период данных: {_date_label(start_date)} - {_date_label(end_date)}\n"
         f"Итого поступления: {_rub(summary['income'])}\n"
         f"Итого расходы: {_rub(summary['total_expense'])}\n"
-        f"Итог периода: {_rub(summary['balance'])}\n"
-        f"Постоянные расходы: {_rub(summary['expense_fixed'])}\n"
-        f"Переменные расходы: {_rub(summary['expense_variable'])}\n\n"
+        f"Итог периода: {_rub(summary['balance'])}\n\n"
         "Категории и статьи:\n" + _join_lines(category_lines) + "\n\n"
         "Помесячное сравнение:\n" + _join_lines(monthly_lines) + "\n\n"
         "Дневная динамика:\n" + _join_lines(daily_lines) + "\n\n"
         "Пики поступлений:\n" + _join_lines(income_peak_lines) + "\n\n"
         "Пики расходов:\n" + _join_lines(expense_peak_lines) + "\n\n"
         "Операции за период:\n" + _join_lines(transaction_lines) + "\n\n"
-        "Плановые платежи, если они нужны для запроса:\n" + _join_lines(planned_lines) + "\n\n"
         "Заметки пользователя, если они нужны для запроса:\n" + _join_lines(note_lines) + "\n\n"
         "Добавь короткий вывод на 1-2 строки: спокойный, полезный, без морализаторства."
     )

@@ -417,8 +417,7 @@ async def cb_dash_by_month(call: CallbackQuery):
     text = (
         "Табло управленца — " + MONTHS_RU[month] + " " + str(year) + "\n\n"
         + "Выручка: " + "{:,.0f}".format(d['income']) + " руб.\n"
-        + "Переменные расходы: -" + "{:,.0f}".format(d['variable_expense']) + " руб.\n"
-        + "Постоянные расходы: -" + "{:,.0f}".format(d['fixed_expense']) + " руб.\n\n"
+        + "Расходы: -" + "{:,.0f}".format(d['total_expense']) + " руб.\n\n"
         + "EBITDA: " + "{:,.0f}".format(d['ebitda']) + " руб.\n"
     )
     if d['depreciation'] > 0:
@@ -474,15 +473,10 @@ async def cb_pnl_by_month(call: CallbackQuery):
     for name, total in d['income_cats']:
         text += "  " + name + ": " + "{:,.0f}".format(total) + " (" + pct(total) + ")\n"
 
-    text += "\nПЕРЕМЕННЫЕ РАСХОДЫ: -" + "{:,.0f}".format(d['variable']) + " (" + pct(d['variable']) + ")\n"
-    for name, total in d['variable_cats']:
-        text += "  " + name + ": -" + "{:,.0f}".format(total) + " (" + pct(total) + ")\n"
-
-    gp_sign = "+" if d['gross_profit'] >= 0 else ""
-    text += "\nМаржинальная прибыль: " + gp_sign + "{:,.0f}".format(d['gross_profit']) + " (" + pct(d['gross_profit']) + ")\n"
-
-    text += "\nПОСТОЯННЫЕ РАСХОДЫ: -" + "{:,.0f}".format(d['fixed']) + " (" + pct(d['fixed']) + ")\n"
-    for name, total in d['fixed_cats']:
+    expense_total = d['variable'] + d['fixed']
+    expense_cats = sorted(d['variable_cats'] + d['fixed_cats'], key=lambda item: item[1], reverse=True)
+    text += "\nРАСХОДЫ: -" + "{:,.0f}".format(expense_total) + " (" + pct(expense_total) + ")\n"
+    for name, total in expense_cats:
         text += "  " + name + ": -" + "{:,.0f}".format(total) + " (" + pct(total) + ")\n"
 
     eb_sign = "+" if d['ebitda'] >= 0 else ""

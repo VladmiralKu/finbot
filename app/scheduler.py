@@ -4,7 +4,16 @@ from datetime import date, timedelta
 
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from app.database import execute, fetchall, fetchone, get_todays_reminders, touch_reminder_sent
+from app.database import (
+    activate_due_pending_subscriptions,
+    activate_subscription_bonuses,
+    execute,
+    fetchall,
+    fetchone,
+    get_todays_reminders,
+    refresh_subscription_state,
+    touch_reminder_sent,
+)
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from html import escape
 
@@ -29,6 +38,12 @@ CUSTOM_EMPTY_DAY_REMINDERS = (
     "📡 <b>Отмазка «не было интернета, поэтому и не внесено» уже не работает.</b>",
     "🚪 <b>Выйти из дома уже рублей 200 стоит — ты спишь, наверно.</b>",
 )
+
+BONUS_MESSAGES = {
+    1: "Оу, похоже твоя подписка закончилась, держи в подарок 3 дня, чтобы не выпадать из привычки.",
+    2: "Подписка закончилась, осталось 2 дня до конца бонус-пакета.",
+    3: "Danger!!! Мы уже на полпути к реализации твоих финансовых целей, не бросай формирование привычки, 1 день до конца бонус-пакета.",
+}
 
 
 async def _empty_day_reminder_text(user_id: int) -> str:
@@ -111,18 +126,11 @@ async def _trial_stats(user_id: int) -> dict:
            LIMIT 3""",
         (user_id,),
     )
-    fixed = await fetchone(
-        """SELECT COALESCE(SUM(amount), 0)
-           FROM transactions
-           WHERE user_id=%s AND type='expense' AND kind='fixed'""",
-        (user_id,),
-    )
     return {
         "income": float(total[0]) if total else 0.0,
         "expense": float(total[1]) if total else 0.0,
         "count": int(total[2]) if total else 0,
         "top": top or [],
-        "fixed": float(fixed[0]) if fixed else 0.0,
     }
 
 
@@ -228,7 +236,7 @@ async def send_daily_activity_reminders(bot):
             """SELECT u.id
                FROM users u
                WHERE COALESCE(u.subscription_tier, 'free') <> 'free'
-                 AND (u.premium_until IS NULL OR u.premium_until > NOW())
+                 AND (u.premium_until IS NULL OR u.premium_until > NOW() OR u.bonus_until > NOW())
                  AND NOT EXISTS (
                      SELECT 1 FROM transactions t
                      WHERE t.user_id = u.id AND t.transaction_date = CURRENT_DATE
@@ -366,7 +374,7 @@ async def send_weekly_reports(bot):
             """SELECT u.id
                FROM users u
                WHERE COALESCE(u.subscription_tier, 'free') <> 'free'
-                 AND (u.premium_until IS NULL OR u.premium_until > NOW())
+                 AND (u.premium_until IS NULL OR u.premium_until > NOW() OR u.bonus_until > NOW())
                  AND NOT EXISTS (
                      SELECT 1 FROM weekly_reports r
                      WHERE r.user_id = u.id AND r.week_start = %s
@@ -410,9 +418,102 @@ async def send_weekly_reports(bot):
         logger.error(f"Weekly report scheduler error: {e}")
 
 
+async def send_subscription_lifecycle_messages(bot):
+    try:
+        await activate_due_pending_subscriptions()
+        await activate_subscription_bonuses()
+        expired_rows = await fetchall(
+            """SELECT id
+               FROM users
+               WHERE COALESCE(subscription_tier, 'free') <> 'free'
+                 AND premium_until IS NOT NULL
+                 AND premium_until <= NOW()
+                 AND pending_subscription_tier IS NULL
+                 AND bonus_until IS NOT NULL
+                 AND bonus_until <= NOW()"""
+        )
+        for (user_id,) in expired_rows:
+            await refresh_subscription_state(user_id)
+
+        paid_rows = await fetchall(
+            """SELECT id, paid_until
+               FROM users u
+               WHERE paid_until IS NOT NULL
+                 AND paid_until > NOW()
+                 AND paid_until::date = CURRENT_DATE + 1
+                 AND pending_subscription_tier IS NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM paid_expiry_reminders r
+                     WHERE r.user_id = u.id AND r.paid_until_date = paid_until::date
+                 )"""
+        )
+        for user_id, paid_until in paid_rows:
+            text = (
+                "Завтра заканчивается оплаченный тариф. "
+                "Лучше продлить заранее, чтобы привычка не слетела с рельс."
+            )
+            try:
+                await bot.send_message(
+                    user_id,
+                    text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Продлить тариф", callback_data="premium")],
+                    ]),
+                )
+                await execute(
+                    """INSERT INTO paid_expiry_reminders (user_id, paid_until_date)
+                       VALUES (%s, %s)
+                       ON CONFLICT DO NOTHING""",
+                    (user_id, paid_until.date()),
+                )
+            except Exception as e:
+                logger.error(f"Failed to send paid expiry reminder to {user_id}: {e}")
+
+        bonus_rows = await fetchall(
+            """SELECT u.id,
+                      u.bonus_started_at::date,
+                      (CURRENT_DATE - u.bonus_started_at::date + 1) AS bonus_day
+               FROM users u
+               WHERE COALESCE(u.subscription_tier, 'free') <> 'free'
+                 AND u.bonus_started_at IS NOT NULL
+                 AND u.bonus_until > NOW()
+                 AND (CURRENT_DATE - u.bonus_started_at::date + 1) BETWEEN 1 AND 3
+                 AND NOT EXISTS (
+                     SELECT 1 FROM subscription_bonus_messages m
+                     WHERE m.user_id = u.id
+                       AND m.bonus_start_date = u.bonus_started_at::date
+                       AND m.day = (CURRENT_DATE - u.bonus_started_at::date + 1)
+                 )"""
+        )
+        for user_id, bonus_start_date, bonus_day in bonus_rows:
+            day = int(bonus_day)
+            text = BONUS_MESSAGES.get(day)
+            if not text:
+                continue
+            try:
+                await bot.send_message(
+                    user_id,
+                    text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Продлить тариф", callback_data="premium")],
+                    ]),
+                )
+                await execute(
+                    """INSERT INTO subscription_bonus_messages (user_id, bonus_start_date, day)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT DO NOTHING""",
+                    (user_id, bonus_start_date, day),
+                )
+            except Exception as e:
+                logger.error(f"Failed to send subscription bonus message to {user_id}: {e}")
+    except Exception as e:
+        logger.error(f"Subscription lifecycle scheduler error: {e}")
+
+
 def setup_scheduler(bot):
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(send_reminders, "cron", hour=9, minute=0, args=[bot])
+    scheduler.add_job(send_subscription_lifecycle_messages, "cron", hour=10, minute=0, args=[bot])
     scheduler.add_job(send_trial_journey_messages, "cron", hour=10, minute=0, args=[bot])
     scheduler.add_job(send_daily_activity_reminders, "cron", hour=12, minute=0, args=[bot])
     scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=19, minute=0, args=[bot])

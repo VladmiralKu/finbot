@@ -60,6 +60,19 @@ async def set_bot_setting(setting_key: str, setting_value: str):
     )
 
 
+TIER_RANKS = {
+    "free": 0,
+    "scan_text": 1,
+    "base": 2,
+    "premium": 3,
+    "business": 4,
+}
+
+
+def _tier_rank(tier: str | None) -> int:
+    return TIER_RANKS.get(tier or "free", 0)
+
+
 async def get_or_create_user(user_id, username, full_name, lang="ru"):
     user = await fetchone("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -143,9 +156,7 @@ async def get_monthly_summary(user_id, year, month):
     for row in rows:
         if row[0] == "income":
             result["income"] += float(row[2])
-        elif row[0] == "expense" and row[1] == "fixed":
-            result["expense_fixed"] += float(row[2])
-        elif row[0] == "expense" and row[1] == "variable":
+        elif row[0] == "expense":
             result["expense_variable"] += float(row[2])
     result["total_expense"] = result["expense_fixed"] + result["expense_variable"]
     result["balance"] = result["income"] - result["total_expense"]
@@ -302,18 +313,13 @@ async def get_promo(code: str):
 
 
 async def use_promo(user_id: int, promo_id: int, tier: str, days: int):
-    from datetime import datetime, timedelta
     existing = await fetchone(
         "SELECT id FROM promo_uses WHERE user_id=%s AND promo_id=%s",
         (user_id, promo_id)
     )
     if existing:
         return False
-    until = datetime.now() + timedelta(days=days)
-    await execute(
-        "UPDATE users SET subscription_tier=%s, is_premium=%s, premium_until=%s WHERE id=%s",
-        (tier, tier == 'premium', until, user_id)
-    )
+    await activate_subscription(user_id, tier=tier, days=days, paid=False)
     await execute(
         "UPDATE promo_codes SET used_count=used_count+1 WHERE id=%s",
         (promo_id,)
@@ -326,63 +332,201 @@ async def use_promo(user_id: int, promo_id: int, tier: str, days: int):
 
 
 async def get_subscription_tier(user_id: int) -> str:
+    return await get_user_tier(user_id)
+
+
+async def activate_subscription(user_id: int, tier: str = 'premium', days: int = 30, paid: bool = False):
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
     row = await fetchone(
-        "SELECT is_premium, premium_until FROM users WHERE id=%s",
-        (user_id,)
+        """SELECT subscription_tier, premium_until,
+                  pending_subscription_tier, pending_subscription_until
+           FROM users
+           WHERE id=%s""",
+        (user_id,),
     )
     if not row:
-        return 'free'
-    from datetime import datetime
-    if row[0] and row[1] and row[1] > datetime.now():
-        return 'premium'
-    if row[0] and not row[1]:
-        return 'premium'
-    return 'free'
+        return {"status": "missing"}
+
+    current_tier = row[0] or "free"
+    current_until = row[1]
+    is_active = current_tier != "free" and (current_until is None or current_until > now)
+    new_rank = _tier_rank(tier)
+    current_rank = _tier_rank(current_tier)
+
+    if is_active and new_rank < current_rank:
+        start_at = current_until or now
+        until = start_at + timedelta(days=days)
+        await execute(
+            """UPDATE users
+               SET pending_subscription_tier=%s,
+                   pending_subscription_until=%s,
+                   pending_subscription_is_paid=%s,
+                   bonus_started_at=NULL,
+                   bonus_until=NULL
+               WHERE id=%s""",
+            (tier, until, paid, user_id),
+        )
+        return {"status": "queued", "starts_at": start_at, "until": until}
+
+    start_at = current_until if is_active and new_rank == current_rank and current_until else now
+    until = start_at + timedelta(days=days)
+    if paid:
+        await execute(
+            """UPDATE users
+               SET subscription_tier=%s,
+                   is_premium=%s,
+                   premium_until=%s,
+                   paid_until=%s,
+                   pending_subscription_tier=NULL,
+                   pending_subscription_until=NULL,
+                   pending_subscription_is_paid=FALSE,
+                   bonus_started_at=NULL,
+                   bonus_until=NULL
+               WHERE id=%s""",
+            (tier, tier == 'premium', until, until, user_id),
+        )
+    else:
+        await execute(
+            """UPDATE users
+               SET subscription_tier=%s,
+                   is_premium=%s,
+                   premium_until=%s,
+                   pending_subscription_tier=NULL,
+                   pending_subscription_until=NULL,
+                   pending_subscription_is_paid=FALSE,
+                   bonus_started_at=NULL,
+                   bonus_until=NULL
+               WHERE id=%s""",
+            (tier, tier == 'premium', until, user_id),
+        )
+    return {
+        "status": "extended" if is_active and new_rank == current_rank else "activated",
+        "starts_at": start_at,
+        "until": until,
+    }
 
 
 async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int = 30):
+    return await activate_subscription(user_id, tier=tier, days=days, paid=True)
+
+
+async def refresh_subscription_state(user_id: int) -> str:
     from datetime import datetime, timedelta
-    until = datetime.now() + timedelta(days=days)
-    await execute(
-        "UPDATE users SET subscription_tier=%s, is_premium=%s, premium_until=%s WHERE id=%s",
-        (tier, tier == 'premium', until, user_id)
+
+    now = datetime.now()
+    row = await fetchone(
+        """SELECT subscription_tier, premium_until,
+                  pending_subscription_tier, pending_subscription_until, pending_subscription_is_paid,
+                  bonus_started_at, bonus_until
+           FROM users
+           WHERE id = %s""",
+        (user_id,),
     )
+    if not row:
+        return 'free'
+
+    tier = row[0] or 'free'
+    until = row[1]
+    pending_tier = row[2]
+    pending_until = row[3]
+    pending_is_paid = bool(row[4])
+    bonus_started_at = row[5]
+    bonus_until = row[6]
+
+    if tier != 'free' and until and until <= now and pending_tier:
+        await execute(
+            """UPDATE users
+               SET subscription_tier=%s,
+                   is_premium=%s,
+                   premium_until=%s,
+                   paid_until=CASE WHEN %s THEN %s ELSE NULL END,
+                   pending_subscription_tier=NULL,
+                   pending_subscription_until=NULL,
+                   pending_subscription_is_paid=FALSE,
+                   bonus_started_at=NULL,
+                   bonus_until=NULL
+               WHERE id=%s""",
+            (pending_tier, pending_tier == 'premium', pending_until, pending_is_paid, pending_until, user_id),
+        )
+        tier = pending_tier
+        until = pending_until
+        bonus_started_at = None
+        bonus_until = None
+
+    if tier != 'free' and (until is None or until > now):
+        return tier
+
+    if tier != 'free' and bonus_until and bonus_until > now:
+        return tier
+
+    if tier != 'free' and until and until <= now and not bonus_started_at:
+        bonus_until = now + timedelta(days=3)
+        await execute(
+            """UPDATE users
+               SET bonus_started_at=%s,
+                   bonus_until=%s
+               WHERE id=%s""",
+            (now, bonus_until, user_id),
+        )
+        return tier
+
+    if tier != 'free':
+        await execute(
+            """UPDATE users
+               SET subscription_tier='free',
+                   is_premium=FALSE,
+                   pending_subscription_tier=NULL,
+                   pending_subscription_until=NULL,
+                   pending_subscription_is_paid=FALSE
+               WHERE id=%s""",
+            (user_id,),
+        )
+    return 'free'
+
+
+async def activate_due_pending_subscriptions():
+    from datetime import datetime
+
+    now = datetime.now()
+    rows = await fetchall(
+        """SELECT id
+           FROM users
+           WHERE pending_subscription_tier IS NOT NULL
+             AND premium_until IS NOT NULL
+             AND premium_until <= %s""",
+        (now,),
+    )
+    for (user_id,) in rows:
+        await refresh_subscription_state(user_id)
+
+
+async def start_subscription_bonus_if_needed(user_id: int):
+    return await refresh_subscription_state(user_id)
+
+
+async def activate_subscription_bonuses():
+    rows = await fetchall(
+        """SELECT id
+           FROM users
+           WHERE COALESCE(subscription_tier, 'free') <> 'free'
+             AND premium_until IS NOT NULL
+             AND premium_until <= NOW()
+             AND pending_subscription_tier IS NULL
+             AND bonus_started_at IS NULL"""
+    )
+    for (user_id,) in rows:
+        await refresh_subscription_state(user_id)
 
 
 async def check_and_expire_trial(user_id):
-    """Сбрасывает тариф если пробный период истёк"""
-    from datetime import datetime
-    row = await fetchone(
-        "SELECT subscription_tier, premium_until FROM users WHERE id = %s",
-        (user_id,)
-    )
-    if not row:
-        return
-    tier, until = row
-    if tier == 'premium' and until and until < datetime.now():
-        await execute(
-            "UPDATE users SET subscription_tier = 'free', premium_until = NULL WHERE id = %s",
-            (user_id,)
-        )
+    """Обновляет состояние тарифа, очереди и бонусных дней."""
+    await refresh_subscription_state(user_id)
 
 
 async def get_user_tier(user_id):
-    await check_and_expire_trial(user_id)
-    row = await fetchone(
-        "SELECT subscription_tier, premium_until FROM users WHERE id = %s",
-        (user_id,)
-    )
-    if not row:
-        return 'free'
-    tier = row[0] or 'free'
-    from datetime import datetime
-    if tier != 'free' and row[1] and row[1] < datetime.now():
-        await execute(
-            "UPDATE users SET subscription_tier = 'free' WHERE id = %s",
-            (user_id,)
-        )
-        return 'free'
-    return tier
+    return await refresh_subscription_state(user_id)
 
 
 async def can_use_feature(user_id, feature):
