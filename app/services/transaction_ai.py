@@ -129,6 +129,13 @@ def _normalize_amount_phrases(text: str) -> str:
     )
 
     result = re.sub(
+        r"\b(\d+(?:[.,]\d+)?)\s*[кk]\b",
+        lambda m: str(int(float(m.group(1).replace(",", ".")) * 1000)),
+        result,
+        flags=re.IGNORECASE,
+    )
+
+    result = re.sub(
         r"\b((?:" + NUMBER_WORD_RE + r")(?:\s+(?:" + NUMBER_WORD_RE + r")){0,3})\s+(?:тыс\.?|тысяч[а-я]*)\b",
         lambda m: str(int((_words_to_number(m.group(1)) or 0) * 1000)),
         result,

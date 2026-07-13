@@ -121,7 +121,9 @@ def _manual_transaction_date(text: str) -> date:
 
 
 def _parse_safe_manual_input(text: str) -> dict | None:
-    value = " ".join((text or "").strip().split())
+    from app.services.transaction_ai import _normalize_amount_phrases
+
+    value = " ".join(_normalize_amount_phrases(text or "").strip().split())
     if not value:
         return None
 
