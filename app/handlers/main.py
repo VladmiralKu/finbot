@@ -1254,18 +1254,20 @@ async def msg_quick_input(message: Message, state: FSMContext):
     if len(saved_items) > 1:
         public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
         lines = []
-        for saved, tx in saved_items:
+        for index, (saved, tx) in enumerate(saved_items, start=1):
             sign = "−" if tx["type"] == "expense" else "+"
             public_id = public_ids.get(int(saved["id"]), str(saved["id"]))
+            date_str = tx["transaction_date"].strftime("%d.%m")
             line = (
+                f"{index}. #{escape(str(public_id))} {date_str} "
                 f"{sign}{float(tx['amount']):,.0f} ₽ — "
-                f"{escape(str(tx['category_name']))} #{escape(str(public_id))}"
+                f"{escape(str(tx['category_name']))}"
             )
             if tx.get("comment"):
-                line += " | 💬 «" + escape(str(tx["comment"])) + "»"
+                line += "\n   💬 «" + escape(str(tx["comment"])) + "»"
             lines.append(line)
 
-        text = f"✅ <b>Записано {len(saved_items)} операций:</b>\n\n" + "\n".join(lines)
+        text = f"✅ <b>Записал {len(saved_items)} операций. Что внёс:</b>\n\n" + "\n".join(lines)
         insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
         if insight:
             text += "\n\n" + insight
@@ -2820,16 +2822,23 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             saved_items.append((saved["id"], tx))
 
         public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
-        for saved_id, tx in saved_items:
+        for index, (saved_id, tx) in enumerate(saved_items, start=1):
             sign = "-" if tx["type"] == "expense" else "+"
             public_id = public_ids.get(int(saved_id), str(saved_id))
+            date_str = tx["transaction_date"].strftime("%d.%m")
             added.append(
-                f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{public_id}"
+                f"{index}. #{public_id} {date_str} {sign}{int(float(tx['amount']))} руб. — {tx['category_name']}"
                 + _format_comment_inline(tx.get("comment"))
             )
 
         if added:
-            response_text = "Записано:\n" + "\n".join(added)
+            count = len(added)
+            response_text = (
+                f"✅ Записал {count} операций. Что внёс:\n"
+                if count > 1
+                else "✅ Записал операцию. Что внёс:\n"
+            )
+            response_text += "\n".join(added)
             insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
             if insight:
                 response_text += "\n\n" + insight
