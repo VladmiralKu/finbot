@@ -27,6 +27,11 @@ from app.keyboards import (
 )
 from app.services.transaction_service import create_transaction
 from app.services.insights import build_first_transaction_insight, build_transaction_insight
+from app.services.transaction_public_ids import (
+    public_number_for_transaction,
+    public_numbers_for_ids,
+    resolve_transaction_reference,
+)
 
 router = Router()
 
@@ -712,7 +717,6 @@ async def cb_recent(call: CallbackQuery):
             callback_data=f"txlist:{y}:{m}"
         )] for y, m in months],
         [InlineKeyboardButton(text="Выгрузить всё в Excel", callback_data="export_all")],
-        [InlineKeyboardButton(text="Удалить транзакцию", callback_data="delete_by_id")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
     ])
     await call.message.edit_text(
@@ -747,11 +751,12 @@ async def cb_scan_receipt(call: CallbackQuery):
 @router.callback_query(F.data.startswith("delete_tx:"))
 async def cb_delete_tx(call: CallbackQuery):
     tx_id = int(call.data.split(":")[1])
+    public_id = await public_number_for_transaction(call.from_user.id, tx_id)
     await execute(
         "DELETE FROM transactions WHERE id=%s AND user_id=%s",
         (tx_id, call.from_user.id)
     )
-    await call.message.edit_text("Транзакция удалена.", reply_markup=main_menu())
+    await call.message.edit_text(f"Транзакция #{public_id} удалена.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data.startswith("confirm_delete_intent:"))
@@ -759,16 +764,18 @@ async def cb_confirm_delete_intent(call: CallbackQuery):
     from app.database import delete_transaction_by_id
 
     tx_id = int(call.data.split(":")[1])
+    public_id = await public_number_for_transaction(call.from_user.id, tx_id)
     success = await delete_transaction_by_id(call.from_user.id, tx_id)
-    text = f"Транзакция #{tx_id} удалена." if success else "Транзакция не найдена."
+    text = f"Транзакция #{public_id} удалена." if success else "Транзакция не найдена."
     await call.message.edit_text(text, reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "cancel_delete_intent")
 async def cb_cancel_delete_intent(call: CallbackQuery, state: FSMContext):
     await state.set_state(DeleteTxState.waiting_id)
+    await state.update_data(delete_year=None, delete_month=None)
     await call.message.edit_text(
-        "Хорошо. Введите номер транзакции для удаления, например: 42.",
+        "Хорошо. Введите номер транзакции для удаления, например: 712.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),
@@ -790,8 +797,9 @@ async def cb_confirm_change_tx_category(call: CallbackQuery):
         "UPDATE transactions SET category_id=%s, type=%s, kind=%s WHERE id=%s AND user_id=%s",
         (int(category_id), type_, kind, int(tx_id), call.from_user.id),
     )
+    public_id = await public_number_for_transaction(call.from_user.id, int(tx_id))
     await call.message.edit_text(
-        f"Готово. Транзакция #{tx_id} перенесена в категорию «{category_name}».",
+        f"Готово. Транзакция #{public_id} перенесена в категорию «{category_name}».",
         reply_markup=main_menu(),
     )
 
@@ -1227,17 +1235,52 @@ async def msg_quick_input(message: Message, state: FSMContext):
     if not transactions:
         return
 
-    tx = transactions[0]
-    saved = await create_transaction(
-        user_id=message.from_user.id,
-        category_id=tx["category_id"],
-        amount=tx["amount"],
-        type_=tx["type"],
-        kind=tx.get("kind"),
-        comment=tx.get("comment") or "",
-        transaction_date=tx.get("transaction_date"),
-        pnl_period=tx.get("pnl_period"),
-    )
+    saved_items = []
+    saved_ids = []
+    for tx in transactions:
+        saved = await create_transaction(
+            user_id=message.from_user.id,
+            category_id=tx["category_id"],
+            amount=tx["amount"],
+            type_=tx["type"],
+            kind=tx.get("kind"),
+            comment=tx.get("comment") or "",
+            transaction_date=tx.get("transaction_date"),
+            pnl_period=tx.get("pnl_period"),
+        )
+        saved_items.append((saved, tx))
+        saved_ids.append(saved["id"])
+
+    if len(saved_items) > 1:
+        public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
+        lines = []
+        for saved, tx in saved_items:
+            sign = "−" if tx["type"] == "expense" else "+"
+            public_id = public_ids.get(int(saved["id"]), str(saved["id"]))
+            line = (
+                f"{sign}{float(tx['amount']):,.0f} ₽ — "
+                f"{escape(str(tx['category_name']))} #{escape(str(public_id))}"
+            )
+            if tx.get("comment"):
+                line += " | 💬 «" + escape(str(tx["comment"])) + "»"
+            lines.append(line)
+
+        text = f"✅ <b>Записано {len(saved_items)} операций:</b>\n\n" + "\n".join(lines)
+        insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
+        if insight:
+            text += "\n\n" + insight
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
+                [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    saved, tx = saved_items[0]
+    public_id = await public_number_for_transaction(message.from_user.id, saved["id"])
 
     sign = "−" if tx["type"] == "expense" else "+"
     date_str = tx["transaction_date"].strftime("%d.%m")
@@ -1247,6 +1290,7 @@ async def msg_quick_input(message: Message, state: FSMContext):
         f"{sign}{tx['amount']:,.0f} ₽\n"
         f"📂 {escape(str(tx['category_name']))}\n"
         f"📅 {date_str}\n"
+        f"🔢 #{escape(str(public_id))}\n"
     )
     if tx.get("comment"):
         text += _format_comment_block_html(tx["comment"]) + "\n"
@@ -1445,13 +1489,15 @@ async def cb_txlist(call: CallbackQuery):
 
     page_size = 30
     page = txs[offset:offset + page_size]
+    public_ids = await public_numbers_for_ids(call.from_user.id, [tx[0] for tx in page])
     text = f"Транзакции за {MONTHS[month]} {year}\n"
     text += f"{offset + 1}-{min(offset + page_size, len(txs))} из {len(txs)}\n\n"
     for tx in page:
         tx_id, date, amount, type_, comment, cat_name, wallet = tx
+        public_id = public_ids.get(int(tx_id), str(tx_id))
         sign = "-" if type_ == "expense" else "+"
         comment_str = _format_comment_inline(comment)
-        line = f"#{tx_id} {date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {cat_name or ''}{comment_str}\n"
+        line = f"#{public_id} {date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {cat_name or ''}{comment_str}\n"
         if len(text) + len(line) > 3500:
             break
         text += line
@@ -1466,7 +1512,7 @@ async def cb_txlist(call: CallbackQuery):
         buttons.append(nav)
     buttons.extend([
         [InlineKeyboardButton(text="✏️ Изменить транзакцию", callback_data=f"edit_by_id:{year}:{month}")],
-        [InlineKeyboardButton(text="🗑 Удалить транзакцию", callback_data="delete_by_id")],
+        [InlineKeyboardButton(text="🗑 Удалить транзакцию", callback_data=f"delete_by_id:{year}:{month}")],
         [InlineKeyboardButton(text="Назад", callback_data="recent")],
     ])
 
@@ -1499,11 +1545,13 @@ async def show_edit_list(call, year, month, offset=0):
         return
 
     page = txs[offset:offset+20]
+    public_ids = await public_numbers_for_ids(call.from_user.id, [tx[0] for tx in page])
     buttons = []
     for tx in page:
         tx_id, date, amount, type_, comment, cat_name, wallet = tx
+        public_id = public_ids.get(int(tx_id), str(tx_id))
         sign = "-" if type_ == "expense" else "+"
-        label = f"#{tx_id} {date.strftime('%d.%m')} {sign}{int(float(amount))} {cat_name or ''}"
+        label = f"#{public_id} {date.strftime('%d.%m')} {sign}{int(float(amount))} {cat_name or ''}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=f"edit_pick:{tx_id}:{year}:{month}")])
 
     nav = []
@@ -1731,11 +1779,20 @@ class DeleteTxState(StatesGroup):
     waiting_id = State()
 
 
-@router.callback_query(F.data == "delete_by_id")
+@router.callback_query(F.data.startswith("delete_by_id"))
 async def cb_delete_by_id(call: CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    year = int(parts[1]) if len(parts) > 2 else None
+    month = int(parts[2]) if len(parts) > 2 else None
     await state.set_state(DeleteTxState.waiting_id)
+    await state.update_data(delete_year=year, delete_month=month)
+    example = "712"
+    hint = ""
+    if month:
+        example = f"{month}12"
+        hint = "\nМожно ввести полный номер из списка или просто порядковый номер внутри месяца."
     await call.message.answer(
-        "Напишите номер транзакции для удаления (например: 42):",
+        f"Напишите номер транзакции для удаления (например: {example}).{hint}",
         parse_mode=None,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Отмена", callback_data="recent")]
@@ -1746,24 +1803,43 @@ async def cb_delete_by_id(call: CallbackQuery, state: FSMContext):
 @router.message(DeleteTxState.waiting_id, F.text)
 async def msg_delete_tx_by_id(message: Message, state: FSMContext):
     from app.database import delete_transaction_by_id
+    raw_number = (message.text or "").strip().replace("#", "")
     try:
-        tx_id = int(message.text.strip().replace("#", ""))
+        int(raw_number)
     except ValueError:
         handled = await handle_intent_message(message, state, message.text, source="text")
         if not handled:
-            await message.answer("Введи числовой номер транзакции, например: 42")
+            await message.answer("Введи числовой номер транзакции, например: 712")
         return
 
+    data = await state.get_data()
+    tx_id = await resolve_transaction_reference(
+        message.from_user.id,
+        raw_number,
+        year=data.get("delete_year"),
+        month=data.get("delete_month"),
+    )
     await state.clear()
+    if not tx_id:
+        await message.answer(
+            f"Транзакция #{raw_number} не найдена или не принадлежит тебе.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Попробовать снова", callback_data="delete_by_id")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    public_id = await public_number_for_transaction(message.from_user.id, tx_id)
     success = await delete_transaction_by_id(message.from_user.id, tx_id)
     if success:
         await message.answer(
-            f"Транзакция #{tx_id} удалена.",
+            f"Транзакция #{public_id} удалена.",
             reply_markup=main_menu()
         )
     else:
         await message.answer(
-            f"Транзакция #{tx_id} не найдена или не принадлежит тебе.",
+            f"Транзакция #{raw_number} не найдена или не принадлежит тебе.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Попробовать снова", callback_data="delete_by_id")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -1792,12 +1868,29 @@ async def msg_delete_tx_by_voice(message: Message, state: FSMContext):
 
     await message.answer(format_recognized_text(text), parse_mode="HTML")
     if text.strip().replace("#", "").isdigit():
-        await state.clear()
+        data = await state.get_data()
         from app.database import delete_transaction_by_id
-        tx_id = int(text.strip().replace("#", ""))
+        raw_number = text.strip().replace("#", "")
+        tx_id = await resolve_transaction_reference(
+            message.from_user.id,
+            raw_number,
+            year=data.get("delete_year"),
+            month=data.get("delete_month"),
+        )
+        await state.clear()
+        if not tx_id:
+            await message.answer(
+                f"Транзакция #{raw_number} не найдена или не принадлежит тебе.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Попробовать снова", callback_data="delete_by_id")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return
+        public_id = await public_number_for_transaction(message.from_user.id, tx_id)
         success = await delete_transaction_by_id(message.from_user.id, tx_id)
         await message.answer(
-            f"Транзакция #{tx_id} удалена." if success else f"Транзакция #{tx_id} не найдена или не принадлежит тебе.",
+            f"Транзакция #{public_id} удалена." if success else f"Транзакция #{raw_number} не найдена или не принадлежит тебе.",
             reply_markup=main_menu() if success else InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Попробовать снова", callback_data="delete_by_id")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -2194,21 +2287,38 @@ async def answer_help_question(user_text: str, bot_answer_func=None):
         return data["choices"][0]["message"]["content"]
 
 
-def _format_tx_preview(tx) -> str:
+def _format_tx_preview(tx, public_id: str | None = None) -> str:
     tx_id, tx_date, amount, type_, comment, category = tx
     sign = "-" if type_ == "expense" else "+"
     comment_part = _format_comment_inline(comment)
-    return f"#{tx_id} {tx_date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {category or ''}{comment_part}"
+    label = public_id or str(tx_id)
+    return f"#{label} {tx_date.strftime('%d.%m')} {sign}{abs(float(amount)):,.0f} {category or ''}{comment_part}"
 
 
-def _format_recent_tx_lines(txs, limit: int = 8) -> str:
+async def _format_tx_preview_async(user_id: int, tx) -> str:
+    return _format_tx_preview(tx, await public_number_for_transaction(user_id, int(tx[0])))
+
+
+async def _format_tx_preview_lines(user_id: int, txs) -> str:
+    tx_list = list(txs)
+    numbers = await public_numbers_for_ids(user_id, [int(tx[0]) for tx in tx_list])
+    return "\n".join(
+        _format_tx_preview(tx, numbers.get(int(tx[0]), str(tx[0])))
+        for tx in tx_list
+    )
+
+
+async def _format_recent_tx_lines(user_id: int, txs, limit: int = 8) -> str:
+    tx_list = list(txs[:limit])
+    numbers = await public_numbers_for_ids(user_id, [int(tx["id"]) for tx in tx_list])
     lines = []
-    for tx in txs[:limit]:
+    for tx in tx_list:
         sign = "-" if tx["type"] == "expense" else "+"
         date_value = tx["transaction_date"].strftime("%d.%m")
         comment = _format_comment_inline(tx.get("comment"))
+        public_id = numbers.get(int(tx["id"]), str(tx["id"]))
         lines.append(
-            f"#{tx['id']} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
+            f"#{public_id} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
             f"{tx.get('category_name') or ''}{comment}"
         )
     return "\n".join(lines)
@@ -2218,7 +2328,7 @@ async def _answer_delete_needs_choice(message: Message, user_id: int, prefix: st
     txs = await get_recent_transactions(user_id, limit=8)
     text = prefix
     if txs:
-        text += "\n\nПоследние операции:\n" + _format_recent_tx_lines(txs)
+        text += "\n\nПоследние операции:\n" + await _format_recent_tx_lines(user_id, txs)
         text += "\n\nНажми «Удалить по номеру» и отправь номер нужной операции."
     else:
         text += "\n\nПока нет операций для удаления."
@@ -2301,17 +2411,8 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                 ]),
             )
             return True
-        lines = []
-        for tx in txs:
-            sign = "-" if tx["type"] == "expense" else "+"
-            date_value = tx["transaction_date"].strftime("%d.%m")
-            comment = _format_comment_inline(tx.get("comment"))
-            lines.append(
-                f"#{tx['id']} {date_value} {sign}{abs(float(tx['amount'])):,.0f} "
-                f"{tx.get('category_name') or ''}{comment}"
-            )
         await message.answer(
-            "Последние транзакции:\n\n" + "\n".join(lines),
+            "Последние транзакции:\n\n" + await _format_recent_tx_lines(message.from_user.id, txs, limit=10),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Открыть список", callback_data="recent")],
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -2533,10 +2634,12 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         variants = []
         tx_id = params.get("tx_id")
         if tx_id:
-            tx = await get_transaction_by_id(message.from_user.id, tx_id)
+            resolved_tx_id = await resolve_transaction_reference(message.from_user.id, tx_id)
+            if resolved_tx_id:
+                tx = await get_transaction_by_id(message.from_user.id, resolved_tx_id)
         elif params.get("last"):
             tx = await get_last_transaction(message.from_user.id)
-        else:
+        if not tx and not params.get("last"):
             from app.services.transaction_commands import find_transaction_from_text
             tx, variants = await find_transaction_from_text(message.from_user.id, params.get("text") or text)
 
@@ -2544,7 +2647,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             if variants:
                 await message.answer(
                     "Нашёл несколько похожих транзакций:\n"
-                    + "\n".join(_format_tx_preview(item) for item in variants)
+                    + await _format_tx_preview_lines(message.from_user.id, variants)
                     + "\n\nНапиши номер нужной транзакции.",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="Удалить по номеру", callback_data="delete_by_id")],
@@ -2561,7 +2664,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             return True
 
         await message.answer(
-            "Вы имеете в виду эту транзакцию?\n" + _format_tx_preview(tx),
+            "Вы имеете в виду эту транзакцию?\n" + await _format_tx_preview_async(message.from_user.id, tx),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(text="Да, удалить", callback_data=f"confirm_delete_intent:{tx[0]}"),
@@ -2580,7 +2683,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             if variants:
                 await message.answer(
                     "Нашёл несколько похожих операций:\n"
-                    + "\n".join(_format_tx_preview(item) for item in variants)
+                    + await _format_tx_preview_lines(message.from_user.id, variants)
                     + "\n\nВыбери операцию из списка или напиши её номер и правку.",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="Открыть список операций", callback_data="recent")],
@@ -2591,7 +2694,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             txs = await get_recent_transactions(message.from_user.id, limit=8)
             text_for_user = "Не понял, какую операцию изменить."
             if txs:
-                text_for_user += "\n\nПоследние операции:\n" + _format_recent_tx_lines(txs)
+                text_for_user += "\n\nПоследние операции:\n" + await _format_recent_tx_lines(message.from_user.id, txs)
                 text_for_user += "\n\nОткрой список, выбери операцию и напиши правку обычными словами."
             await message.answer(
                 text_for_user,
@@ -2641,7 +2744,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         category_name = parsed.get("new_category_name")
         if not category_id:
             await message.answer(
-                "Не понял новую категорию. Напиши, например: «поменяй категорию транзакции #42 на Транспорт».",
+                "Не понял новую категорию. Напиши, например: «поменяй категорию транзакции #712 на Транспорт».",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
@@ -2656,7 +2759,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             if variants:
                 await message.answer(
                     "Нашёл несколько похожих транзакций:\n"
-                    + "\n".join(_format_tx_preview(item) for item in variants)
+                    + await _format_tx_preview_lines(message.from_user.id, variants)
                     + "\n\nНапиши номер транзакции и новую категорию точнее.",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -2672,7 +2775,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
             return True
         await message.answer(
             "Вы имеете в виду эту транзакцию?\n"
-            + _format_tx_preview(tx)
+            + await _format_tx_preview_async(message.from_user.id, tx)
             + f"\n\nПоменять категорию на «{category_name}»?",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
@@ -2701,6 +2804,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
     if name == "add_transaction":
         added = []
         saved_ids = []
+        saved_items = []
         for tx in params.get("transactions", []):
             saved = await create_transaction(
                 user_id=message.from_user.id,
@@ -2713,9 +2817,14 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                 pnl_period=tx.get("pnl_period"),
             )
             saved_ids.append(saved["id"])
+            saved_items.append((saved["id"], tx))
+
+        public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
+        for saved_id, tx in saved_items:
             sign = "-" if tx["type"] == "expense" else "+"
+            public_id = public_ids.get(int(saved_id), str(saved_id))
             added.append(
-                f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{saved['id']}"
+                f"{sign}{int(float(tx['amount']))} руб. — {tx['category_name']} #{public_id}"
                 + _format_comment_inline(tx.get("comment"))
             )
 

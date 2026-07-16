@@ -94,6 +94,7 @@ async def msg_voice(message: Message, state: FSMContext):
     from app.handlers.main import AddTransaction
     from app.services.insights import build_first_transaction_insight
     from app.services.transaction_ai import extract_transactions_from_text
+    from app.services.transaction_public_ids import public_numbers_for_ids
     from app.services.transaction_service import create_transaction
 
     current_state = await state.get_state()
@@ -156,6 +157,7 @@ async def msg_voice(message: Message, state: FSMContext):
         transactions = await extract_transactions_from_text(message.from_user.id, text, source="voice")
         added = []
         saved_ids = []
+        saved_items = []
 
         # Проверяем нужна ли конвертация валюты
         usd_rate = None
@@ -185,9 +187,14 @@ async def msg_voice(message: Message, state: FSMContext):
                 pnl_period=tx.get("pnl_period"),
             )
             saved_ids.append(saved["id"])
+            saved_items.append((saved["id"], tx, amount, type_, hint_currency))
+
+        public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
+        for saved_id, tx, amount, type_, hint_currency in saved_items:
             sign = "-" if type_ == 'expense' else "+"
+            public_id = public_ids.get(int(saved_id), str(saved_id))
             added.append(
-                sign + str(int(amount)) + " руб. — " + tx["category_name"] + hint_currency + f" #{saved['id']}"
+                sign + str(int(amount)) + " руб. — " + tx["category_name"] + hint_currency + f" #{public_id}"
                 + _format_comment_inline(tx.get("comment"))
             )
 

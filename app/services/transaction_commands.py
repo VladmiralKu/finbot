@@ -8,6 +8,7 @@ import httpx
 from app.database import fetchall, fetchone, get_categories
 from app.services.category_matcher import match_category
 from app.services.transaction_ai import extract_transactions_from_text
+from app.services.transaction_public_ids import resolve_transaction_reference
 
 
 MONTHS = {
@@ -39,6 +40,25 @@ def _month_from_text(text: str) -> tuple[int, int] | None:
 
 def _tx_tuple(row):
     return (row[0], row[1], row[2], row[3], row[4], row[5])
+
+
+async def _transaction_by_reference(
+    user_id: int,
+    raw_number,
+    year: int | None = None,
+    month: int | None = None,
+):
+    tx_id = await resolve_transaction_reference(user_id, raw_number, year=year, month=month)
+    if not tx_id:
+        return None
+    row = await fetchone(
+        """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment, c.name
+           FROM transactions t
+           LEFT JOIN categories c ON t.category_id = c.id
+           WHERE t.user_id=%s AND t.id=%s""",
+        (user_id, int(tx_id)),
+    )
+    return _tx_tuple(row) if row else None
 
 
 def _fallback_category_change_parse(text: str) -> dict:
@@ -87,11 +107,18 @@ def _json_object_from_text(content: str) -> dict:
 
 
 async def find_transaction_from_text(user_id: int, text: str):
+    period = _month_from_text(text)
+    ref_match = re.search(r"(?:#|транзакци[яюи]\s*|операци[яюи]\s*|номер\s*)(\d+)", (text or "").lower())
+    if ref_match:
+        year, month = period if period else (None, None)
+        tx = await _transaction_by_reference(user_id, ref_match.group(1), year=year, month=month)
+        if tx:
+            return tx, []
+
     txs = await extract_transactions_from_text(user_id, text, source="command")
     parsed = txs[0] if txs else {}
     amount = parsed.get("amount")
     category_id = parsed.get("category_id")
-    period = _month_from_text(text)
 
     conditions = ["t.user_id=%s"]
     params = [user_id]
@@ -302,17 +329,6 @@ async def parse_transaction_edit(user_id: int, text: str, current: dict) -> dict
 
 
 async def find_transaction_for_category_change(user_id: int, text: str, parsed: dict):
-    tx_id = parsed.get("tx_id")
-    if tx_id:
-        row = await fetchone(
-            """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment, c.name
-               FROM transactions t
-               LEFT JOIN categories c ON t.category_id = c.id
-               WHERE t.user_id=%s AND t.id=%s""",
-            (user_id, int(tx_id)),
-        )
-        return _tx_tuple(row) if row else None, []
-
     amount = parsed.get("amount")
     year = parsed.get("year")
     month = parsed.get("month")
@@ -320,6 +336,11 @@ async def find_transaction_for_category_change(user_id: int, text: str, parsed: 
         period = _month_from_text(text)
         if period:
             year, month = period
+
+    tx_id = parsed.get("tx_id")
+    if tx_id:
+        row = await _transaction_by_reference(user_id, tx_id, year=year, month=month)
+        return row, []
 
     conditions = ["t.user_id=%s"]
     params = [user_id]
@@ -349,13 +370,9 @@ async def find_transaction_for_edit(user_id: int, text: str):
     lower = (text or "").lower()
     tx_match = re.search(r"(?:#|транзакци[яюи]\s*|операци[яюи]\s*|номер\s*)(\d+)", lower)
     if tx_match:
-        row = await fetchone(
-            """SELECT t.id, t.transaction_date, t.amount, t.type, t.comment, c.name
-               FROM transactions t
-               LEFT JOIN categories c ON t.category_id = c.id
-               WHERE t.user_id=%s AND t.id=%s""",
-            (user_id, int(tx_match.group(1))),
-        )
-        return _tx_tuple(row) if row else None, []
+        period = _month_from_text(text)
+        year, month = period if period else (None, None)
+        row = await _transaction_by_reference(user_id, tx_match.group(1), year=year, month=month)
+        return row, []
 
     return await find_transaction_from_text(user_id, text)
