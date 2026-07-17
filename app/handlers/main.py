@@ -27,6 +27,7 @@ from app.keyboards import (
 )
 from app.services.transaction_service import create_transaction
 from app.services.insights import build_first_transaction_insight, build_transaction_insight
+from app.services.onboarding_video import maybe_send_onboarding_video
 from app.services.transaction_public_ids import (
     public_number_for_transaction,
     public_numbers_for_ids,
@@ -605,6 +606,7 @@ async def _save_transaction(message: Message, state: FSMContext, comment: str):
         text,
         reply_markup=confirm_keyboard(tx["id"]),
     )
+    await maybe_send_onboarding_video(message.bot, message.from_user.id)
 
 
 @router.callback_query(F.data == "report_month")
@@ -1279,6 +1281,7 @@ async def msg_quick_input(message: Message, state: FSMContext):
                 [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
             ]),
         )
+        await maybe_send_onboarding_video(message.bot, message.from_user.id)
         return
 
     saved, tx = saved_items[0]
@@ -1315,6 +1318,7 @@ async def msg_quick_input(message: Message, state: FSMContext):
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
         ])
     )
+    await maybe_send_onboarding_video(message.bot, message.from_user.id)
 
 
 # --- /reset и /deleteaccount ---
@@ -2848,6 +2852,7 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
             )
+            await maybe_send_onboarding_video(message.bot, message.from_user.id)
             return True
 
     return False

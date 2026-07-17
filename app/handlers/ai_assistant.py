@@ -532,6 +532,8 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             parse_mode=None,
             reply_markup=onboarding_finish_keyboard() if mode == AI_MODE_PROFILE else _ai_mode_keyboard(mode)
         )
+        from app.services.onboarding_video import maybe_send_onboarding_video
+        await maybe_send_onboarding_video(message.bot, message.from_user.id)
     except Exception as e:
         await thinking.edit_text("Ошибка: " + str(e))
 
@@ -595,3 +597,5 @@ async def msg_ai_chat(message: Message, state: FSMContext):
         parse_mode=None,
         reply_markup=onboarding_finish_keyboard() if mode == AI_MODE_PROFILE else _ai_mode_keyboard(mode)
     )
+    from app.services.onboarding_video import maybe_send_onboarding_video
+    await maybe_send_onboarding_video(message.bot, message.from_user.id)

@@ -17,6 +17,10 @@ class WelcomeVoiceState(StatesGroup):
     waiting_voice = State()
 
 
+class OnboardingVideoState(StatesGroup):
+    waiting_video = State()
+
+
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
@@ -75,6 +79,39 @@ async def msg_set_welcome_voice_wrong(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await message.answer("Мне нужно именно голосовое. Текстом харизму не прикрутим.")
+
+
+@router.message(Command("setonboardingvideo"))
+async def cmd_set_onboarding_video(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(OnboardingVideoState.waiting_video)
+    await message.answer(
+        "Кидай сюда видео для автоонбординга. Подпись к видео сохраню как текст под роликом.\n\n"
+        "Пользователю оно отправится автоматически после первой операции или первой финцели."
+    )
+
+
+@router.message(OnboardingVideoState.waiting_video, F.video)
+async def msg_set_onboarding_video(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+
+    from app.database import set_bot_setting
+
+    await set_bot_setting("onboarding_video_file_id", message.video.file_id)
+    await set_bot_setting("onboarding_video_caption", message.caption or "")
+    await message.answer(
+        "Готово. Видео сохранено и будет отправляться автоматически после первого действия пользователя."
+    )
+
+
+@router.message(OnboardingVideoState.waiting_video)
+async def msg_set_onboarding_video_wrong(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("Нужно именно видео. Пришли ролик, а подпись добавь прямо к нему.")
 
 
 @router.message(Command("broadcast"))

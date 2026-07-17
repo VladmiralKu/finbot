@@ -93,6 +93,7 @@ async def msg_voice(message: Message, state: FSMContext):
     from app.handlers.business import NoteDeleteState, NoteSearchState, NoteState
     from app.handlers.main import AddTransaction
     from app.services.insights import build_first_transaction_insight
+    from app.services.onboarding_video import maybe_send_onboarding_video
     from app.services.transaction_ai import extract_transactions_from_text
     from app.services.transaction_public_ids import public_numbers_for_ids
     from app.services.transaction_service import create_transaction
@@ -211,6 +212,7 @@ async def msg_voice(message: Message, state: FSMContext):
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ])
             )
+            await maybe_send_onboarding_video(message.bot, message.from_user.id)
         else:
             from app.handlers.main import (
                 HELP_TRIGGERS,

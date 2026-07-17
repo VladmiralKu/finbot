@@ -139,6 +139,9 @@ async def msg_photo_receipt(message: Message):
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
             ])
         )
+        if added:
+            from app.services.onboarding_video import maybe_send_onboarding_video
+            await maybe_send_onboarding_video(message.bot, message.from_user.id)
 
     except Exception as e:
         try:

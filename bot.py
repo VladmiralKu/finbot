@@ -106,6 +106,7 @@ async def main():
     try:
         from app.database import execute
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_until TIMESTAMP")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_video_sent_at TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_tier VARCHAR(50)")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_until TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_is_paid BOOLEAN DEFAULT FALSE")

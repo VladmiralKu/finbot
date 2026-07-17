@@ -306,3 +306,6 @@ async def cb_bank_import_confirm(call: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
         ]),
     )
+    if created:
+        from app.services.onboarding_video import maybe_send_onboarding_video
+        await maybe_send_onboarding_video(call.bot, call.from_user.id)
