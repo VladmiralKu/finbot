@@ -456,7 +456,7 @@ async def msg_promo_code(message: Message, state: FSMContext):
 
     promo_id, _, tier, days, max_uses, used_count, expires_at = promo
 
-    if used_count >= max_uses:
+    if max_uses is not None and used_count >= max_uses:
         await message.answer("Промокод уже использован максимальное количество раз.")
         return
 

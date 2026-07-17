@@ -319,6 +319,15 @@ async def use_promo(user_id: int, promo_id: int, tier: str, days: int):
     )
     if existing:
         return False
+    promo = await fetchone(
+        "SELECT max_uses, used_count FROM promo_codes WHERE id=%s",
+        (promo_id,)
+    )
+    if not promo:
+        return False
+    max_uses, used_count = promo
+    if max_uses is not None and used_count >= max_uses:
+        return False
     await activate_subscription(user_id, tier=tier, days=days, paid=False)
     await execute(
         "UPDATE promo_codes SET used_count=used_count+1 WHERE id=%s",
