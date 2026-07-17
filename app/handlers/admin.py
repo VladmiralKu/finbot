@@ -114,6 +114,28 @@ async def msg_set_onboarding_video_wrong(message: Message, state: FSMContext):
     await message.answer("Нужно именно видео. Пришли ролик, а подпись добавь прямо к нему.")
 
 
+@router.message(Command("setonboardingcaption"))
+async def cmd_set_onboarding_caption(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    caption = (message.text or "").strip()[len("/setonboardingcaption"):].strip()
+    if not caption:
+        await message.answer(
+            "Напиши текст сразу после команды:\n\n"
+            "/setonboardingcaption Твой текст под видео"
+        )
+        return
+    if len(caption) > 1024:
+        await message.answer("Подпись к видео в Telegram максимум 1024 символа. Сократи чуть-чуть.")
+        return
+
+    from app.database import set_bot_setting
+
+    await set_bot_setting("onboarding_video_caption", caption)
+    await message.answer("Готово. Подпись к onboarding-видео обновлена.")
+
+
 @router.message(Command("broadcast"))
 async def cmd_broadcast(message: Message):
     if not is_admin(message.from_user.id):
