@@ -277,19 +277,19 @@ async def _build_transaction(
 
 
 async def extract_transactions_from_text(user_id: int, text: str, source: str) -> list[dict]:
-    text = _normalize_amount_phrases(_normalize_income_aliases(text or ""))
+    text = _normalize_income_aliases(text or "")
 
-    multi_transactions = []
-    for segment, amount_token in _candidate_segments(text):
-        amount = _parse_amount(amount_token)
-        if amount is None:
-            continue
-        tx_type = _guess_type(segment, amount_token=amount_token)
-        tx = await _build_transaction(user_id, segment, amount, tx_type, source)
-        if tx:
-            multi_transactions.append(tx)
-    if multi_transactions:
-        return multi_transactions
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if source != "voice" and len(lines) > 1:
+        transactions = []
+        for line in lines:
+            line_transactions = await extract_transactions_from_text(user_id, line, source)
+            if line_transactions:
+                transactions.append(line_transactions[0])
+        if transactions:
+            return transactions
+
+    text = _normalize_amount_phrases(text)
 
     parsed = parse_quick_input(text)
     if parsed and parsed.get("amount"):

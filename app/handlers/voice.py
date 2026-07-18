@@ -202,7 +202,10 @@ async def msg_voice(message: Message, state: FSMContext):
         if added:
             if current_state:
                 await state.clear()
-            response_text = "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added)
+            if len(added) == 1:
+                response_text = "Записано:\n" + "\n".join(added)
+            else:
+                response_text = "Записано " + str(len(added)) + " транзакций:\n" + "\n".join(added)
             insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
             if insight:
                 response_text += "\n\n" + insight
