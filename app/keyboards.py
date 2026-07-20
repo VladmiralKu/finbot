@@ -47,6 +47,7 @@ def onboarding_finish_keyboard():
 def reports_menu_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗓 Календарь", callback_data="calendar")],
+        [InlineKeyboardButton(text="💳 Кредиты", callback_data="credits_menu")],
         [InlineKeyboardButton(text="📊 Отчёт ДДС", callback_data="report_month")],
         [InlineKeyboardButton(text="📥 Выгрузить всю базу", callback_data="export_all")],
         [InlineKeyboardButton(text="Меню", callback_data="main_menu")],

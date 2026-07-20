@@ -273,8 +273,14 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
-@router.message(F.text.in_({"🏠 Меню", "Меню", "/start"}))
+@router.message(F.text.in_({"🏠 Меню", "Меню", "/start", "/menu"}))
 async def msg_open_menu(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Выбирай действие:", reply_markup=main_menu())
+
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Выбирай действие:", reply_markup=main_menu())
 

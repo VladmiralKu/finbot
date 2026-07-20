@@ -510,12 +510,56 @@ async def send_subscription_lifecycle_messages(bot):
         logger.error(f"Subscription lifecycle scheduler error: {e}")
 
 
+async def send_credit_balance_requests(bot):
+    try:
+        month_start = date.today().replace(day=1)
+        rows = await fetchall(
+            """SELECT DISTINCT c.user_id
+               FROM credit_cards c
+               WHERE c.is_active = TRUE
+                 AND NOT EXISTS (
+                     SELECT 1 FROM credit_balance_requests r
+                     WHERE r.user_id = c.user_id
+                       AND r.request_month = %s
+                 )""",
+            (month_start,),
+        )
+        for (user_id,) in rows:
+            text = (
+                "💳 <b>Первое число. Сверяем кредитку.</b>\n\n"
+                "<blockquote>Напиши текущий остаток по кредиту, чтобы я показал реальный прогресс закрытия карты.</blockquote>\n\n"
+                "Можно свободно:\n"
+                "<code>Тинькофф остаток долга 83500, лимит 150000</code>\n\n"
+                "Если лимит подняли — напиши его в этой же фразе."
+            )
+            try:
+                await bot.send_message(
+                    user_id,
+                    text,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="💳 Открыть кредиты", callback_data="credits_menu")],
+                    ]),
+                )
+                await execute(
+                    """INSERT INTO credit_balance_requests (user_id, request_month)
+                       VALUES (%s, %s)
+                       ON CONFLICT DO NOTHING""",
+                    (user_id, month_start),
+                )
+            except Exception as e:
+                logger.error(f"Failed to send credit balance request to {user_id}: {e}")
+    except Exception as e:
+        logger.error(f"Credit balance request scheduler error: {e}")
+
+
 def setup_scheduler(bot):
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(send_reminders, "cron", hour=9, minute=0, args=[bot])
     scheduler.add_job(send_subscription_lifecycle_messages, "cron", hour=10, minute=0, args=[bot])
     scheduler.add_job(send_trial_journey_messages, "cron", hour=10, minute=0, args=[bot])
     scheduler.add_job(send_daily_activity_reminders, "cron", hour=12, minute=0, args=[bot])
+    scheduler.add_job(send_credit_balance_requests, "cron", day=1, hour=10, minute=30, args=[bot])
     scheduler.add_job(send_weekly_reports, "cron", day_of_week="sun", hour=19, minute=0, args=[bot])
     scheduler.start()
     return scheduler
