@@ -181,6 +181,42 @@ def parse_limit_amount(text: str) -> float | None:
     return _amount_after(text, ("лимит", "подняли", "увеличили", "стал", "стало", "до")) or _first_amount(text)
 
 
+def parse_credit_card_edit_payload(text: str) -> dict:
+    result = {}
+
+    name_match = re.search(
+        r"(?:название|имя|переименуй|переименовать|назови)\s+(?:в\s+)?([^,;\n]+)",
+        text or "",
+        re.IGNORECASE,
+    )
+    if name_match:
+        name = name_match.group(1).strip(" .:-")
+        if name:
+            result["name"] = name[:64]
+
+    debt = _amount_after(text, ("долг", "тело", "остаток", "задолженность"))
+    if debt is not None:
+        result["debt_amount"] = debt
+
+    limit = _amount_after(text, ("лимит",))
+    if limit is not None:
+        result["credit_limit"] = limit
+
+    min_payment = _amount_after(text, ("минимальн", "минималк", "мин\\.?\\s*плат"))
+    if min_payment is not None:
+        result["min_payment"] = min_payment
+
+    payment_day = _payment_day(text)
+    if payment_day is not None:
+        result["payment_day"] = payment_day
+
+    interest_rate = _interest_rate(text)
+    if interest_rate is not None:
+        result["interest_rate"] = interest_rate
+
+    return result
+
+
 async def list_credit_cards(user_id: int):
     rows = await fetchall(
         """SELECT id, name, debt_amount, credit_limit, min_payment, payment_day, interest_rate, updated_at
@@ -289,6 +325,115 @@ async def update_credit_limit(user_id: int, card_id: int, credit_limit: float, c
               (user_id, card_id, event_type, debt_amount, credit_limit, comment)
            VALUES (%s, %s, 'limit_update', %s, %s, %s)""",
         (user_id, card_id, row[2], row[3], comment),
+    )
+    return row
+
+
+async def update_credit_card_details(user_id: int, card_id: int, updates: dict, comment: str = ""):
+    allowed = {
+        "name",
+        "debt_amount",
+        "credit_limit",
+        "min_payment",
+        "payment_day",
+        "interest_rate",
+    }
+    clean_updates = {key: value for key, value in updates.items() if key in allowed}
+    if not clean_updates:
+        return None
+
+    set_parts = []
+    params = []
+    for key, value in clean_updates.items():
+        set_parts.append(key + "=%s")
+        params.append(value)
+    set_parts.append("updated_at=NOW()")
+    params.extend([user_id, card_id])
+
+    row = await fetchone(
+        """UPDATE credit_cards
+           SET """ + ", ".join(set_parts) + """
+           WHERE user_id=%s AND id=%s AND is_active=TRUE
+           RETURNING id, name, debt_amount, credit_limit, min_payment, payment_day, interest_rate, updated_at""",
+        tuple(params),
+    )
+    if not row:
+        return None
+
+    event_type = "settings_update"
+    if "debt_amount" in clean_updates:
+        event_type = "balance_update"
+    elif "credit_limit" in clean_updates:
+        event_type = "limit_update"
+
+    await execute(
+        """INSERT INTO credit_card_events
+              (user_id, card_id, event_type, debt_amount, credit_limit, comment)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (user_id, card_id, event_type, row[2], row[3], comment),
+    )
+    return row
+
+
+async def update_last_credit_topup(user_id: int, card_id: int, amount: float, comment: str = ""):
+    last = await fetchone(
+        """SELECT id, event_type, amount
+           FROM credit_card_events
+           WHERE user_id=%s AND card_id=%s AND event_type <> 'delete'
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1""",
+        (user_id, card_id),
+    )
+    if not last:
+        return None
+    if last[1] != "topup":
+        return {"error": "not_latest"}
+
+    event_id = last[0]
+    old_amount = float(last[2] or 0)
+    delta = float(amount) - old_amount
+    row = await fetchone(
+        """UPDATE credit_cards
+           SET debt_amount = GREATEST(COALESCE(debt_amount, 0) - %s, 0),
+               updated_at = NOW()
+           WHERE user_id=%s AND id=%s AND is_active=TRUE
+           RETURNING id, name, debt_amount, credit_limit, min_payment, payment_day, interest_rate, updated_at""",
+        (delta, user_id, card_id),
+    )
+    if not row:
+        return None
+
+    await execute(
+        """UPDATE credit_card_events
+           SET amount=%s,
+               debt_amount=%s,
+               credit_limit=%s,
+               comment=%s
+           WHERE id=%s AND user_id=%s AND card_id=%s""",
+        (amount, row[2], row[3], comment, event_id, user_id, card_id),
+    )
+    return {
+        "card": row,
+        "old_amount": old_amount,
+        "new_amount": amount,
+    }
+
+
+async def delete_credit_card(user_id: int, card_id: int):
+    row = await fetchone(
+        """UPDATE credit_cards
+           SET is_active=FALSE, updated_at=NOW()
+           WHERE user_id=%s AND id=%s AND is_active=TRUE
+           RETURNING id, name, debt_amount, credit_limit""",
+        (user_id, card_id),
+    )
+    if not row:
+        return None
+    await execute(
+        """INSERT INTO credit_card_events
+              (user_id, card_id, event_type, debt_amount, credit_limit, comment)
+           VALUES (%s, %s, 'delete', %s, %s, %s)""",
+        (user_id, card_id, row[2], row[3], "Кредитка удалена"),
     )
     return row
 

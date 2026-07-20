@@ -1,7 +1,7 @@
 from html import escape
 
 from aiogram import F, Router
-from aiogram.filters import StateFilter
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -10,15 +10,19 @@ from app.services.credit_cards import (
     add_credit_topup,
     create_credit_card,
     credit_month_summary,
+    delete_credit_card,
     get_credit_card,
     list_credit_cards,
     parse_balance_payload,
+    parse_credit_card_edit_payload,
     parse_credit_card_payload,
     parse_limit_amount,
     parse_topup_amount,
     rub,
+    update_credit_card_details,
     update_credit_balance,
     update_credit_limit,
+    update_last_credit_topup,
 )
 
 
@@ -40,6 +44,7 @@ class CreditState(StatesGroup):
     waiting_topup = State()
     waiting_balance = State()
     waiting_limit = State()
+    waiting_edit = State()
 
 
 def _cancel_text(text: str | None) -> bool:
@@ -74,6 +79,44 @@ def _progress_line(card) -> str:
     return "Доступно: <b>" + rub(available) + "</b> из " + rub(limit) + f" · занято {used_pct:.0f}%"
 
 
+def _edit_examples_text(card) -> str:
+    return (
+        "Что меняем в <b>" + escape(_card_title(card)) + "</b>?\n\n"
+        "Пиши свободно, можно несколько полей сразу:\n"
+        "<code>долг 83500, лимит 150000</code>\n"
+        "<code>минимальный платёж 8000, платёж 25 числа</code>\n"
+        "<code>название Альфа кредитка</code>\n"
+        "<code>ставка 29.9%</code>\n\n"
+        "Если ошибся в последнем пополнении:\n"
+        "<code>последнее пополнение 5000</code>\n\n"
+        "Если ошибся в пополнении, проще поставить правильный текущий долг: "
+        "<code>остаток долга 83500</code>."
+    )
+
+
+def _changed_fields_text(updates: dict) -> str:
+    labels = {
+        "name": "название",
+        "debt_amount": "остаток долга",
+        "credit_limit": "лимит",
+        "min_payment": "минимальный платёж",
+        "payment_day": "день платежа",
+        "interest_rate": "ставка",
+    }
+    lines = []
+    for key, value in updates.items():
+        if key in {"debt_amount", "credit_limit", "min_payment"}:
+            shown = rub(value)
+        elif key == "payment_day":
+            shown = str(value) + " число"
+        elif key == "interest_rate":
+            shown = str(float(value)).rstrip("0").rstrip(".") + "%"
+        else:
+            shown = escape(str(value))
+        lines.append("• " + labels.get(key, key) + ": <b>" + shown + "</b>")
+    return "\n".join(lines)
+
+
 def _instructions_text() -> str:
     return (
         "💳 <b>Как вести кредитку</b>\n\n"
@@ -90,6 +133,11 @@ def _instructions_text() -> str:
         "<b>4. Увеличение лимита</b>\n"
         "Если банк поднял лимит:\n"
         "<code>лимит увеличили до 200000</code>\n\n"
+        "<b>5. Исправить данные</b>\n"
+        "Открой кредитку → «Изменить данные» и напиши:\n"
+        "<code>долг 83500, минимальный платёж 8000, платёж 25 числа</code>\n\n"
+        "<b>6. Удалить кредитку</b>\n"
+        "Открой кредитку → «Удалить кредитку». Я сначала спрошу подтверждение.\n\n"
         "В месячном итоге я сравниваю: долг на начало, пополнения и текущий остаток. "
         "Так видно, сколько денег снова ушло с кредитки."
     )
@@ -119,6 +167,8 @@ def _card_kb(card_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➕ Пополнение карты", callback_data=f"credit_topup:{card_id}")],
         [InlineKeyboardButton(text="📍 Обновить остаток", callback_data=f"credit_balance:{card_id}")],
         [InlineKeyboardButton(text="⬆️ Увеличить лимит", callback_data=f"credit_limit:{card_id}")],
+        [InlineKeyboardButton(text="✏️ Изменить данные", callback_data=f"credit_edit:{card_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить кредитку", callback_data=f"credit_delete:{card_id}")],
         [InlineKeyboardButton(text="Как вносить", callback_data="credit_help")],
         [InlineKeyboardButton(text="Назад", callback_data="credits_menu")],
     ])
@@ -216,6 +266,84 @@ async def _show_credits(target, user_id: int):
         await target.answer(text, parse_mode="HTML", reply_markup=_credits_menu_kb(cards))
 
 
+async def _send_credit_edit_entry(message: Message, state: FSMContext):
+    cards = await list_credit_cards(message.from_user.id)
+    if not cards:
+        await message.answer(
+            "Кредиток пока нет. Сначала добавь её в Отчёты → Кредиты.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Открыть кредиты", callback_data="credits_menu")],
+            ]),
+        )
+        return
+    if len(cards) > 1:
+        await message.answer(
+            "Какую кредитку меняем?",
+            reply_markup=_choose_card_kb(cards, "credit_edit"),
+        )
+        return
+
+    card = cards[0]
+    await state.set_state(CreditState.waiting_edit)
+    await state.update_data(credit_card_id=card[0])
+    await message.answer(
+        _edit_examples_text(card),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data=f"credit_view:{card[0]}")],
+        ]),
+    )
+
+
+async def _send_credit_delete_entry(message: Message):
+    cards = await list_credit_cards(message.from_user.id)
+    if not cards:
+        await message.answer(
+            "Удалять пока нечего: кредиток нет.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Открыть кредиты", callback_data="credits_menu")],
+            ]),
+        )
+        return
+    if len(cards) > 1:
+        await message.answer(
+            "Какую кредитку удалить?",
+            reply_markup=_choose_card_kb(cards, "credit_delete"),
+        )
+        return
+
+    card = cards[0]
+    await message.answer(
+        "Удалить кредитку <b>" + escape(_card_title(card)) + "</b>?\n\n"
+        "История останется в базе, но карта пропадёт из раздела и напоминаний.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да, удалить", callback_data=f"credit_delete_confirm:{card[0]}")],
+            [InlineKeyboardButton(text="Нет, назад", callback_data=f"credit_view:{card[0]}")],
+        ]),
+    )
+
+
+@router.message(Command("credit_edit"), StateFilter(default_state))
+async def cmd_credit_edit(message: Message, state: FSMContext):
+    await _send_credit_edit_entry(message, state)
+
+
+@router.message(Command("credit_delete"), StateFilter(default_state))
+async def cmd_credit_delete(message: Message):
+    await _send_credit_delete_entry(message)
+
+
+@router.message(F.text.regexp(r"(?i)^(?:исправь|исправить|измени|изменить).{0,35}(?:кредит|кредитк|карту)"), StateFilter(default_state))
+async def msg_credit_edit_entry(message: Message, state: FSMContext):
+    await _send_credit_edit_entry(message, state)
+
+
+@router.message(F.text.regexp(r"(?i)^(?:удали|удалить).{0,35}(?:кредит|кредитк|карту)"), StateFilter(default_state))
+async def msg_credit_delete_entry(message: Message):
+    await _send_credit_delete_entry(message)
+
+
 @router.callback_query(F.data == "credits_menu")
 async def cb_credits_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -287,6 +415,138 @@ async def cb_credit_view(call: CallbackQuery, state: FSMContext):
         await _card_text(call.from_user.id, card),
         parse_mode="HTML",
         reply_markup=_card_kb(card_id),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("credit_edit:"))
+async def cb_credit_edit(call: CallbackQuery, state: FSMContext):
+    card_id = int(call.data.split(":")[1])
+    card = await get_credit_card(call.from_user.id, card_id)
+    if not card:
+        await call.answer("Карта не найдена", show_alert=True)
+        return
+    await state.set_state(CreditState.waiting_edit)
+    await state.update_data(credit_card_id=card_id)
+    await call.message.edit_text(
+        _edit_examples_text(card),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data=f"credit_view:{card_id}")],
+        ]),
+    )
+    await call.answer()
+
+
+@router.message(CreditState.waiting_edit)
+async def msg_credit_edit(message: Message, state: FSMContext):
+    data = await state.get_data()
+    card_id = int(data.get("credit_card_id"))
+
+    if _cancel_text(message.text):
+        await state.clear()
+        card = await get_credit_card(message.from_user.id, card_id)
+        if card:
+            await message.answer(await _card_text(message.from_user.id, card), parse_mode="HTML", reply_markup=_card_kb(card_id))
+        else:
+            await _show_credits(message, message.from_user.id)
+        return
+
+    text = message.text or ""
+    lower = text.lower()
+    if any(word in lower for word in ("пополнение", "пополнил", "внес", "внёс", "закинул", "погасил")):
+        amount = parse_topup_amount(text)
+        if amount is None:
+            await message.answer("Не увидел сумму пополнения. Например: <code>последнее пополнение 5000</code>", parse_mode="HTML")
+            return
+        result = await update_last_credit_topup(message.from_user.id, card_id, amount, text)
+        await state.clear()
+        if result and result.get("error") == "not_latest":
+            await message.answer(
+                "После последнего пополнения уже были другие изменения по карте. "
+                "Чтобы не спутать историю, поставь правильный текущий остаток: "
+                "<code>остаток долга 83500</code>",
+                parse_mode="HTML",
+            )
+            return
+        if not result:
+            await message.answer(
+                "Не нашёл пополнений по этой кредитке. Можно просто поставить правильный остаток: "
+                "<code>остаток долга 83500</code>",
+                parse_mode="HTML",
+            )
+            return
+        card = result["card"]
+        await message.answer(
+            "Исправил последнее пополнение:\n"
+            "было <b>" + rub(result["old_amount"]) + "</b>, стало <b>" + rub(result["new_amount"]) + "</b>\n\n"
+            + await _card_text(message.from_user.id, card),
+            parse_mode="HTML",
+            reply_markup=_card_kb(card_id),
+        )
+        return
+
+    updates = parse_credit_card_edit_payload(text)
+    if not updates:
+        card = await get_credit_card(message.from_user.id, card_id)
+        if not card:
+            await state.clear()
+            await message.answer("Карта не найдена.")
+            return
+        await message.answer(
+            "Не понял, что менять.\n\n" + _edit_examples_text(card),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Отмена", callback_data=f"credit_view:{card_id}")],
+            ]),
+        )
+        return
+
+    card = await update_credit_card_details(message.from_user.id, card_id, updates, message.text or "")
+    await state.clear()
+    if not card:
+        await message.answer("Карта не найдена.")
+        return
+    await message.answer(
+        "Изменил:\n" + _changed_fields_text(updates) + "\n\n" + await _card_text(message.from_user.id, card),
+        parse_mode="HTML",
+        reply_markup=_card_kb(card_id),
+    )
+
+
+@router.callback_query(F.data.startswith("credit_delete:"))
+async def cb_credit_delete(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    card_id = int(call.data.split(":")[1])
+    card = await get_credit_card(call.from_user.id, card_id)
+    if not card:
+        await call.answer("Карта не найдена", show_alert=True)
+        return
+    await call.message.edit_text(
+        "Удалить кредитку <b>" + escape(_card_title(card)) + "</b>?\n\n"
+        "История останется в базе, но карта пропадёт из раздела и напоминаний.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Да, удалить", callback_data=f"credit_delete_confirm:{card_id}")],
+            [InlineKeyboardButton(text="Нет, назад", callback_data=f"credit_view:{card_id}")],
+        ]),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("credit_delete_confirm:"))
+async def cb_credit_delete_confirm(call: CallbackQuery, state: FSMContext):
+    await state.clear()
+    card_id = int(call.data.split(":")[1])
+    deleted = await delete_credit_card(call.from_user.id, card_id)
+    if not deleted:
+        await call.answer("Карта не найдена", show_alert=True)
+        return
+    cards = await list_credit_cards(call.from_user.id)
+    await call.message.edit_text(
+        "Кредитка <b>" + escape(str(deleted[1] or "Кредитка")) + "</b> удалена.",
+        parse_mode="HTML",
+        reply_markup=_credits_menu_kb(cards),
     )
     await call.answer()
 
