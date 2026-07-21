@@ -4,6 +4,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
+from html import escape
 import re
 import httpx
 import json
@@ -29,6 +30,126 @@ def _ai_mode_keyboard(mode: str) -> InlineKeyboardMarkup:
 
 class AIState(StatesGroup):
     chatting = State()
+
+
+def _draft_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Внести", callback_data="ai_draft_commit")],
+        [InlineKeyboardButton(text="✏️ Уточнить", callback_data="ai_draft_clarify")],
+        [InlineKeyboardButton(text="Отмена", callback_data="ai_draft_cancel")],
+    ])
+
+
+def _format_draft_amount(tx: dict) -> str:
+    sign = "-" if tx.get("type") == "expense" else "+"
+    return sign + f"{float(tx.get('amount') or 0):,.0f}".replace(",", " ") + " ₽"
+
+
+def _format_draft_text(transactions: list[dict], intro: str | None = None) -> str:
+    lines = [intro or "Разобрал сообщение. Проверь, так ли вносить:"]
+    lines.append("")
+    for index, tx in enumerate(transactions, start=1):
+        tx_date = tx.get("transaction_date")
+        if hasattr(tx_date, "strftime"):
+            date_text = tx_date.strftime("%d.%m.%Y")
+        else:
+            date_text = str(tx_date or "")
+        line = (
+            str(index) + ". <b>" + escape(date_text) + "</b> "
+            + "<b>" + escape(_format_draft_amount(tx)) + "</b>"
+            + " — " + escape(str(tx.get("category_name") or "Без категории"))
+        )
+        comment = (tx.get("comment") or "").strip()
+        if comment:
+            line += "\n   💬 <i>«" + escape(comment) + "»</i>"
+        lines.append(line)
+    lines.append("")
+    lines.append("Нажмёшь «Внести» — запишу это в базу. Пока это только черновик.")
+    return "\n".join(lines)
+
+
+def _looks_like_complex_transaction_draft(text: str) -> bool:
+    lower = (text or "").lower()
+    without_dates = re.sub(r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b", " ", lower)
+    without_dates = re.sub(
+        r"\b\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-яё]*",
+        " ",
+        without_dates,
+    )
+    amounts = re.findall(r"(?<!\d)[+-]?\d[\d\s]*(?:[,.]\d{1,2})?(?!\d)", without_dates)
+    if len(amounts) < 2:
+        return False
+    date_like = any(word in lower for word in (
+        "сегодня", "вчера", "позавчера", "завтра", "дня назад", "дней назад",
+    ))
+    date_like = date_like or bool(
+        re.search(r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b", lower)
+        or re.search(
+            r"\b\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)",
+            lower,
+        )
+    )
+    separator_like = "\n" in text or ";" in text or "," in text or " потом " in lower or " затем " in lower
+    return date_like or separator_like
+
+
+async def _send_transaction_draft(
+    target,
+    state: FSMContext,
+    user_id: int,
+    user_text: str,
+    previous_draft: list[dict] | None = None,
+    source_text: str | None = None,
+):
+    from app.services.transaction_drafts import (
+        build_transaction_draft,
+        serialize_draft,
+    )
+
+    can, used, limit = await check_ai_limit(user_id)
+    if not can:
+        await state.clear()
+        await target.answer(
+            "Лимит ИИ-помощника исчерпан или тариф не даёт доступ.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Тарифы", callback_data="premium")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+
+    thinking = await target.answer("Разбираю сообщение и собираю черновик операций...")
+    transactions = await build_transaction_draft(user_id, user_text, previous_draft=previous_draft)
+    await log_ai_usage(user_id)
+    if not transactions:
+        await state.set_state(AIState.chatting)
+        await state.update_data(
+            ai_mode=AI_MODE_ACTION,
+            history=[],
+            ai_draft_source_text=source_text or user_text,
+            pending_transaction_draft=[],
+            ai_draft_waiting_clarification=False,
+        )
+        await thinking.edit_text(
+            "Не нашёл в сообщении операции, которые можно уверенно внести.\n\n"
+            "Можно уточнить прямо здесь, например: «вчера 500 кофе, сегодня 1200 продукты».",
+            reply_markup=_ai_mode_keyboard(AI_MODE_ACTION),
+        )
+        return
+
+    await state.set_state(AIState.chatting)
+    await state.update_data(
+        ai_mode=AI_MODE_ACTION,
+        history=[],
+        ai_draft_source_text=source_text or user_text,
+        pending_transaction_draft=serialize_draft(transactions),
+        ai_draft_waiting_clarification=False,
+    )
+    await thinking.edit_text(
+        _format_draft_text(transactions),
+        parse_mode="HTML",
+        reply_markup=_draft_keyboard(),
+    )
 
 
 async def get_user_context(user_id: int) -> str:
@@ -459,6 +580,134 @@ async def cb_ai_mode(call: CallbackQuery, state: FSMContext):
     await call.message.answer(text, parse_mode=None, reply_markup=_ai_mode_keyboard(mode))
 
 
+@router.callback_query(F.data == "ai_action_pending")
+async def cb_ai_action_pending(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    user_text = data.get("ai_pending_text")
+    if not user_text:
+        await call.message.answer(
+            "Не нашёл исходное сообщение. Напиши его ещё раз.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="ИИ-помощник", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return
+    await _send_transaction_draft(call.message, state, call.from_user.id, user_text)
+
+
+@router.callback_query(F.data == "ai_draft_clarify")
+async def cb_ai_draft_clarify(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    data = await state.get_data()
+    if not data.get("pending_transaction_draft"):
+        await call.message.answer("Черновика уже нет. Напиши сообщение заново.", reply_markup=_ai_mode_keyboard(AI_MODE_ACTION))
+        return
+    await state.set_state(AIState.chatting)
+    await state.update_data(ai_mode=AI_MODE_ACTION, ai_draft_waiting_clarification=True)
+    await call.message.answer(
+        "Напиши уточнение обычным текстом.\n\n"
+        "Например: «такси было 700», «продукты были вчера», «убери кофе».",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Отмена", callback_data="ai_draft_cancel")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "ai_draft_cancel")
+async def cb_ai_draft_cancel(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.update_data(
+        pending_transaction_draft=[],
+        ai_draft_waiting_clarification=False,
+        ai_draft_source_text="",
+    )
+    await call.message.answer(
+        "Ок, не вношу.",
+        parse_mode=None,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            [InlineKeyboardButton(text="ИИ-помощник", callback_data="ai_assistant")],
+        ]),
+    )
+
+
+@router.callback_query(F.data == "ai_draft_commit")
+async def cb_ai_draft_commit(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    from app.services.transaction_drafts import deserialize_draft
+    from app.services.transaction_service import create_transaction
+    from app.services.transaction_public_ids import public_numbers_for_ids
+    from app.services.insights import build_first_transaction_insight
+    from app.services.onboarding_video import maybe_send_onboarding_video
+
+    data = await state.get_data()
+    transactions = deserialize_draft(data.get("pending_transaction_draft"))
+    if not transactions:
+        await call.message.answer(
+            "Черновика уже нет. Напиши сообщение заново.",
+            reply_markup=_ai_mode_keyboard(AI_MODE_ACTION),
+        )
+        return
+
+    saved_ids = []
+    saved_items = []
+    for tx in transactions:
+        saved = await create_transaction(
+            user_id=call.from_user.id,
+            category_id=tx["category_id"],
+            amount=tx["amount"],
+            type_=tx["type"],
+            kind=tx.get("kind"),
+            comment=tx.get("comment") or "",
+            transaction_date=tx.get("transaction_date"),
+            pnl_period=tx.get("pnl_period"),
+        )
+        saved_ids.append(saved["id"])
+        saved_items.append((saved["id"], tx))
+
+    await state.update_data(
+        pending_transaction_draft=[],
+        ai_draft_waiting_clarification=False,
+        ai_draft_source_text="",
+        ai_mode=AI_MODE_ACTION,
+    )
+
+    public_ids = await public_numbers_for_ids(call.from_user.id, saved_ids)
+    lines = []
+    for index, (saved_id, tx) in enumerate(saved_items, start=1):
+        public_id = public_ids.get(int(saved_id), str(saved_id))
+        date_text = tx["transaction_date"].strftime("%d.%m")
+        comment = (tx.get("comment") or "").strip()
+        line = (
+            str(index) + ". #" + str(public_id) + " "
+            + date_text + " " + _format_draft_amount(tx)
+            + " — " + str(tx.get("category_name") or "")
+        )
+        if comment:
+            line += " | «" + comment + "»"
+        lines.append(line)
+
+    response_text = (
+        "✅ Записал " + str(len(saved_items)) + " операций:\n"
+        if len(saved_items) > 1
+        else "✅ Записал операцию:\n"
+    )
+    response_text += "\n".join(lines)
+    insight = await build_first_transaction_insight(call.from_user.id, saved_ids)
+    if insight:
+        response_text += "\n\n" + insight
+
+    await call.message.answer(
+        response_text,
+        parse_mode=None,
+        reply_markup=_ai_mode_keyboard(AI_MODE_ACTION),
+    )
+    await maybe_send_onboarding_video(call.message.bot, call.from_user.id)
+
+
 @router.callback_query(F.data == "ai_end")
 async def cb_ai_end(call: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -559,6 +808,22 @@ async def msg_ai_chat(message: Message, state: FSMContext):
     try:
         user_text = message.text or message.caption or ""
         if mode == AI_MODE_ACTION:
+            if data.get("ai_draft_waiting_clarification"):
+                from app.services.transaction_drafts import deserialize_draft
+                previous_draft = deserialize_draft(data.get("pending_transaction_draft"))
+                source_text = data.get("ai_draft_source_text") or user_text
+                await _send_transaction_draft(
+                    message,
+                    state,
+                    message.from_user.id,
+                    user_text,
+                    previous_draft=previous_draft,
+                    source_text=source_text,
+                )
+                return
+            if _looks_like_complex_transaction_draft(user_text):
+                await _send_transaction_draft(message, state, message.from_user.id, user_text)
+                return
             from app.handlers.main import handle_intent_message
             handled = await handle_intent_message(message, state, user_text, source="ai_action")
             if handled:

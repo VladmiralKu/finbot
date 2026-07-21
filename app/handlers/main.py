@@ -98,6 +98,44 @@ def _looks_like_edit_confusion(text: str) -> bool:
     return action_like and object_like
 
 
+def _looks_like_complex_transaction_batch(text: str) -> bool:
+    lower = (text or "").lower()
+    without_dates = re.sub(r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b", " ", lower)
+    without_dates = re.sub(
+        r"\b\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-яё]*",
+        " ",
+        without_dates,
+    )
+    amounts = re.findall(r"(?<!\d)[+-]?\d[\d\s]*(?:[,.]\d{1,2})?(?!\d)", without_dates)
+    if len(amounts) < 2:
+        return False
+    date_like = any(word in lower for word in (
+        "сегодня", "вчера", "позавчера", "дня назад", "дней назад",
+    ))
+    date_like = date_like or bool(
+        re.search(r"\b\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?\b", lower)
+        or re.search(
+            r"\b\d{1,2}\s+(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)",
+            lower,
+        )
+    )
+    separator_like = "\n" in (text or "") or ";" in lower or "," in lower or " потом " in lower or " затем " in lower
+    return date_like or separator_like
+
+
+async def _offer_ai_action_for_pending_text(message: Message, state: FSMContext):
+    await state.update_data(ai_pending_text=message.text)
+    await message.answer(
+        "Похоже, тут несколько операций или сложное сообщение.\n\n"
+        "Могу разобрать через ИИ: покажу черновик и внесу в базу только после твоего подтверждения.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Разобрать и внести", callback_data="ai_action_pending")],
+            [InlineKeyboardButton(text="Просто обсудить", callback_data="ask_ai_pending")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ]),
+    )
+
+
 MANUAL_AMOUNT_RE = re.compile(r"(?<!\d)([+-]?\d[\d\s]*(?:[,.]\d{1,2})?)(?!\d)")
 MANUAL_AMOUNT_WITH_CURRENCY_RE = re.compile(
     r"(?<!\d)([+-]?\d[\d\s]*(?:[,.]\d{1,2})?)\s*"
@@ -3028,6 +3066,10 @@ async def msg_free_text(message: Message, state: FSMContext):
             await message.answer("Ошибка хелпера: " + str(e))
         return
 
+    if _looks_like_complex_transaction_batch(message.text):
+        await _offer_ai_action_for_pending_text(message, state)
+        return
+
     handled = await handle_intent_message(message, state, message.text, source="text")
     if not handled:
         if _looks_like_edit_confusion(message.text):
@@ -3041,15 +3083,7 @@ async def msg_free_text(message: Message, state: FSMContext):
                 ]),
             )
             return
-        await state.update_data(ai_pending_text=message.text)
-        await message.answer(
-            "Не понял это как транзакцию или команду. Могу передать фразу в ИИ-помощник.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Спросить ИИ", callback_data="ask_ai_pending")],
-                [InlineKeyboardButton(text="Открыть ИИ-помощник", callback_data="ai_assistant")],
-                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
-            ]),
-        )
+        await _offer_ai_action_for_pending_text(message, state)
         return
 
 
