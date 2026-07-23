@@ -323,6 +323,30 @@ async def cmd_menu(message: Message, state: FSMContext):
     await message.answer("Выбирай действие:", reply_markup=main_menu())
 
 
+@router.message(Command("ctrl_z"))
+@router.message(Command("undo"))
+async def cmd_ctrl_z(message: Message, state: FSMContext):
+    from app.services.undo_actions import format_undo_prompt, get_last_undo_action
+
+    await state.clear()
+    action = await get_last_undo_action(message.from_user.id)
+    if not action:
+        await message.answer(
+            "↩️ CTRL+Z пока пустой: после обновления я начну запоминать новые действия для отката.",
+            reply_markup=main_menu(),
+        )
+        return
+
+    await message.answer(
+        await format_undo_prompt(message.from_user.id, action),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ Отменить", callback_data=f"ctrlz_confirm:{action['id']}")],
+            [InlineKeyboardButton(text="Оставить как есть", callback_data="ctrlz_cancel")],
+        ]),
+    )
+
+
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(call: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -330,6 +354,25 @@ async def cb_main_menu(call: CallbackQuery, state: FSMContext):
         await call.message.edit_text("Выбирай действие:", reply_markup=main_menu())
     except Exception:
         await call.message.answer("Выбирай действие:", reply_markup=main_menu())
+
+
+@router.callback_query(F.data.startswith("ctrlz_confirm:"))
+async def cb_ctrlz_confirm(call: CallbackQuery):
+    from app.services.undo_actions import undo_action
+
+    action_id = int(call.data.split(":")[1])
+    success, text = await undo_action(call.from_user.id, action_id)
+    await call.answer("Откатил" if success else "Не откатил")
+    try:
+        await call.message.edit_text(text, reply_markup=main_menu())
+    except Exception:
+        await call.message.answer(text, reply_markup=main_menu())
+
+
+@router.callback_query(F.data == "ctrlz_cancel")
+async def cb_ctrlz_cancel(call: CallbackQuery):
+    await call.answer()
+    await call.message.edit_text("Ок, ничего не трогаю.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data == "categories_list")
