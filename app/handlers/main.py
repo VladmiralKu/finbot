@@ -22,11 +22,8 @@ from app.keyboards import (
     manual_input_keyboard,
     onboarding_finish_keyboard,
     categories_keyboard,
-    confirm_keyboard,
     premium_keyboard,
 )
-from app.services.transaction_service import create_transaction
-from app.services.insights import build_first_transaction_insight, build_transaction_insight
 from app.services.onboarding_video import maybe_send_onboarding_video
 from app.services.transaction_public_ids import (
     public_number_for_transaction,
@@ -127,7 +124,7 @@ async def _offer_ai_action_for_pending_text(message: Message, state: FSMContext)
     await state.update_data(ai_pending_text=message.text)
     await message.answer(
         "Похоже, тут несколько операций или сложное сообщение.\n\n"
-        "Могу разобрать через ИИ: покажу черновик и внесу в базу только после твоего подтверждения.",
+        "Могу разобрать через ИИ и сразу внести в базу. После этого покажу, что записал.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Разобрать и внести", callback_data="ai_action_pending")],
             [InlineKeyboardButton(text="Просто обсудить", callback_data="ask_ai_pending")],
@@ -641,6 +638,52 @@ async def msg_amount(message: Message, state: FSMContext):
 
 
 async def _save_safe_manual_transaction(message: Message, state: FSMContext, text: str):
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if len(lines) > 1:
+        data = await state.get_data()
+        transactions = []
+        missed = []
+        for line in lines:
+            parsed = _parse_safe_manual_input(line)
+            if not parsed:
+                missed.append(line)
+                continue
+            transactions.append({
+                "category_id": data["category_id"],
+                "category_name": data.get("category_name") or "выбранная категория",
+                "amount": parsed["amount"],
+                "type": data["tx_type"],
+                "kind": data["kind"],
+                "comment": parsed["comment"],
+                "transaction_date": parsed["transaction_date"],
+                "pnl_period": None,
+            })
+
+        if not transactions:
+            await message.answer(
+                "Не нашёл суммы. Пиши каждую операцию с новой строки, например:\n500 кофе\n700 продукты"
+            )
+            return
+
+        await state.clear()
+        from app.services.transaction_entry import save_transactions_and_build_response
+
+        saved_ids, response_text = await save_transactions_and_build_response(message.from_user.id, transactions)
+        if missed:
+            missed_text = "\n".join("• " + escape(line) for line in missed[:5])
+            response_text += "\n\nНе внёс строки без понятной суммы:\n" + missed_text
+        await message.answer(
+            response_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
+                [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+            ]),
+        )
+        if saved_ids:
+            await maybe_send_onboarding_video(message.bot, message.from_user.id)
+        return
+
     parsed = _parse_safe_manual_input(text)
     if not parsed:
         await message.answer(
@@ -666,34 +709,28 @@ async def msg_comment(message: Message, state: FSMContext):
 
 async def _save_transaction(message: Message, state: FSMContext, comment: str):
     data = await state.get_data()
-    tx = await create_transaction(
-        user_id=message.from_user.id,
-        category_id=data["category_id"],
-        amount=data["amount"],
-        type_=data["tx_type"],
-        kind=data["kind"],
-        comment=comment,
-        transaction_date=data.get("transaction_date"),
-    )
     await state.clear()
-    sign = "−" if data["tx_type"] == "expense" else "+"
-    tx_date = data.get("transaction_date") or date.today()
-    category_name = data.get("category_name") or "выбранная категория"
-    text = (
-        f"✅ Записано!\n\n"
-        f"{sign}{data['amount']:,.0f} ₽\n"
-        f"📂 {category_name}\n"
-        f"📅 {tx_date.strftime('%d.%m.%Y')}\n"
-        f"{_format_comment_block(comment)}"
+    from app.services.transaction_entry import send_saved_transactions_response
+
+    tx = {
+        "category_id": data["category_id"],
+        "category_name": data.get("category_name") or "выбранная категория",
+        "amount": data["amount"],
+        "type": data["tx_type"],
+        "kind": data["kind"],
+        "comment": comment,
+        "transaction_date": data.get("transaction_date"),
+        "pnl_period": None,
+    }
+    await send_saved_transactions_response(
+        message,
+        message.from_user.id,
+        [tx],
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
+            [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
+        ]),
     )
-    insight = await build_transaction_insight(message.from_user.id, tx["id"])
-    if insight:
-        text += "\n\n" + insight
-    await message.answer(
-        text,
-        reply_markup=confirm_keyboard(tx["id"]),
-    )
-    await maybe_send_onboarding_video(message.bot, message.from_user.id)
 
 
 @router.callback_query(F.data == "report_month")
@@ -1319,93 +1356,21 @@ async def msg_quick_input(message: Message, state: FSMContext):
         return
 
     from app.services.transaction_ai import extract_transactions_from_text
+    from app.services.transaction_entry import send_saved_transactions_response
 
     transactions = await extract_transactions_from_text(message.from_user.id, message.text or "", source="text")
     if not transactions:
         return
 
-    saved_items = []
-    saved_ids = []
-    for tx in transactions:
-        saved = await create_transaction(
-            user_id=message.from_user.id,
-            category_id=tx["category_id"],
-            amount=tx["amount"],
-            type_=tx["type"],
-            kind=tx.get("kind"),
-            comment=tx.get("comment") or "",
-            transaction_date=tx.get("transaction_date"),
-            pnl_period=tx.get("pnl_period"),
-        )
-        saved_items.append((saved, tx))
-        saved_ids.append(saved["id"])
-
-    if len(saved_items) > 1:
-        public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
-        lines = []
-        for index, (saved, tx) in enumerate(saved_items, start=1):
-            sign = "−" if tx["type"] == "expense" else "+"
-            public_id = public_ids.get(int(saved["id"]), str(saved["id"]))
-            date_str = tx["transaction_date"].strftime("%d.%m")
-            line = (
-                f"{index}. #{escape(str(public_id))} {date_str} "
-                f"{sign}{float(tx['amount']):,.0f} ₽ — "
-                f"{escape(str(tx['category_name']))}"
-            )
-            if tx.get("comment"):
-                line += "\n   💬 «" + escape(str(tx["comment"])) + "»"
-            lines.append(line)
-
-        text = f"✅ <b>Записал {len(saved_items)} операций. Что внёс:</b>\n\n" + "\n".join(lines)
-        insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
-        if insight:
-            text += "\n\n" + insight
-        await message.answer(
-            text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
-                [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
-            ]),
-        )
-        await maybe_send_onboarding_video(message.bot, message.from_user.id)
-        return
-
-    saved, tx = saved_items[0]
-    public_id = await public_number_for_transaction(message.from_user.id, saved["id"])
-
-    sign = "−" if tx["type"] == "expense" else "+"
-    date_str = tx["transaction_date"].strftime("%d.%m")
-
-    text = (
-        f"✅ <b>Записано!</b>\n\n"
-        f"{sign}{tx['amount']:,.0f} ₽\n"
-        f"📂 {escape(str(tx['category_name']))}\n"
-        f"📅 {date_str}\n"
-        f"🔢 #{escape(str(public_id))}\n"
-    )
-    if tx.get("comment"):
-        text += _format_comment_block_html(tx["comment"]) + "\n"
-    if tx.get("pnl_period"):
-        text += f"📊 ПнЛ: {escape(str(tx['pnl_period']))}\n"
-
-    insight = await build_transaction_insight(message.from_user.id, saved["id"])
-    if insight:
-        text += "\n" + insight + "\n"
-
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    await message.answer(
-        text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Верно", callback_data=f"confirm:{saved['id']}"),
-                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_tx:{saved['id']}"),
-            ],
+    await send_saved_transactions_response(
+        message,
+        message.from_user.id,
+        transactions,
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
             [InlineKeyboardButton(text="🏠 Меню", callback_data="main_menu")],
-        ])
+        ]),
     )
-    await maybe_send_onboarding_video(message.bot, message.from_user.id)
 
 
 # --- /reset и /deleteaccount ---
@@ -2895,51 +2860,19 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         return True
 
     if name == "add_transaction":
-        added = []
-        saved_ids = []
-        saved_items = []
-        for tx in params.get("transactions", []):
-            saved = await create_transaction(
-                user_id=message.from_user.id,
-                category_id=tx["category_id"],
-                amount=tx["amount"],
-                type_=tx["type"],
-                kind=tx.get("kind"),
-                comment=tx.get("comment") or "",
-                transaction_date=tx.get("transaction_date"),
-                pnl_period=tx.get("pnl_period"),
-            )
-            saved_ids.append(saved["id"])
-            saved_items.append((saved["id"], tx))
+        from app.services.transaction_entry import send_saved_transactions_response
 
-        public_ids = await public_numbers_for_ids(message.from_user.id, saved_ids)
-        for index, (saved_id, tx) in enumerate(saved_items, start=1):
-            sign = "-" if tx["type"] == "expense" else "+"
-            public_id = public_ids.get(int(saved_id), str(saved_id))
-            date_str = tx["transaction_date"].strftime("%d.%m")
-            added.append(
-                f"{index}. #{public_id} {date_str} {sign}{int(float(tx['amount']))} руб. — {tx['category_name']}"
-                + _format_comment_inline(tx.get("comment"))
-            )
-
-        if added:
-            count = len(added)
-            response_text = (
-                f"✅ Записал {count} операций. Что внёс:\n"
-                if count > 1
-                else "✅ Записал операцию. Что внёс:\n"
-            )
-            response_text += "\n".join(added)
-            insight = await build_first_transaction_insight(message.from_user.id, saved_ids)
-            if insight:
-                response_text += "\n\n" + insight
-            await message.answer(
-                response_text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        transactions = params.get("transactions", [])
+        if transactions:
+            await send_saved_transactions_response(
+                message,
+                message.from_user.id,
+                transactions,
+                InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
                     [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
                 ]),
             )
-            await maybe_send_onboarding_video(message.bot, message.from_user.id)
             return True
 
     return False
@@ -3110,7 +3043,9 @@ async def msg_free_text(message: Message, state: FSMContext):
         return
 
     if _looks_like_complex_transaction_batch(message.text):
-        await _offer_ai_action_for_pending_text(message, state)
+        from app.handlers.ai_assistant import _send_transaction_draft
+
+        await _send_transaction_draft(message, state, message.from_user.id, message.text, keep_ai_state=False)
         return
 
     handled = await handle_intent_message(message, state, message.text, source="text")

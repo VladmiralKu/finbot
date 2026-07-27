@@ -7,7 +7,6 @@ from datetime import datetime
 from html import escape
 import re
 import httpx
-import json
 
 router = Router()
 
@@ -46,7 +45,7 @@ def _format_draft_amount(tx: dict) -> str:
 
 
 def _format_draft_text(transactions: list[dict], intro: str | None = None) -> str:
-    lines = [intro or "Разобрал сообщение. Проверь, так ли вносить:"]
+    lines = [intro or "Разобрал сообщение:"]
     lines.append("")
     for index, tx in enumerate(transactions, start=1):
         tx_date = tx.get("transaction_date")
@@ -64,7 +63,7 @@ def _format_draft_text(transactions: list[dict], intro: str | None = None) -> st
             line += "\n   💬 <i>«" + escape(comment) + "»</i>"
         lines.append(line)
     lines.append("")
-    lines.append("Нажмёшь «Внести» — запишу это в базу. Пока это только черновик.")
+    lines.append("Сейчас такие операции вносятся сразу. Этот экран нужен только для старых черновиков.")
     return "\n".join(lines)
 
 
@@ -100,11 +99,13 @@ async def _send_transaction_draft(
     user_text: str,
     previous_draft: list[dict] | None = None,
     source_text: str | None = None,
+    keep_ai_state: bool = True,
 ):
     from app.services.transaction_drafts import (
         build_transaction_draft,
-        serialize_draft,
     )
+    from app.services.onboarding_video import maybe_send_onboarding_video
+    from app.services.transaction_entry import save_transactions_and_build_response
 
     can, used, limit = await check_ai_limit(user_id)
     if not can:
@@ -118,10 +119,35 @@ async def _send_transaction_draft(
         )
         return
 
-    thinking = await target.answer("Разбираю сообщение и собираю черновик операций...")
+    thinking = await target.answer("Разбираю сообщение и сразу вношу операции...")
     transactions = await build_transaction_draft(user_id, user_text, previous_draft=previous_draft)
     await log_ai_usage(user_id)
     if not transactions:
+        if keep_ai_state:
+            await state.set_state(AIState.chatting)
+            await state.update_data(
+                ai_mode=AI_MODE_ACTION,
+                history=[],
+                ai_draft_source_text=source_text or user_text,
+                pending_transaction_draft=[],
+                ai_draft_waiting_clarification=False,
+            )
+            reply_markup = _ai_mode_keyboard(AI_MODE_ACTION)
+        else:
+            await state.clear()
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="ИИ-помощник", callback_data="ai_assistant")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ])
+        await thinking.edit_text(
+            "Не нашёл в сообщении операции, которые можно уверенно внести.\n\n"
+            "Можно уточнить прямо здесь, например: «вчера 500 кофе, сегодня 1200 продукты».",
+            reply_markup=reply_markup,
+        )
+        return
+
+    saved_ids, response_text = await save_transactions_and_build_response(user_id, transactions)
+    if keep_ai_state:
         await state.set_state(AIState.chatting)
         await state.update_data(
             ai_mode=AI_MODE_ACTION,
@@ -130,26 +156,20 @@ async def _send_transaction_draft(
             pending_transaction_draft=[],
             ai_draft_waiting_clarification=False,
         )
-        await thinking.edit_text(
-            "Не нашёл в сообщении операции, которые можно уверенно внести.\n\n"
-            "Можно уточнить прямо здесь, например: «вчера 500 кофе, сегодня 1200 продукты».",
-            reply_markup=_ai_mode_keyboard(AI_MODE_ACTION),
-        )
-        return
-
-    await state.set_state(AIState.chatting)
-    await state.update_data(
-        ai_mode=AI_MODE_ACTION,
-        history=[],
-        ai_draft_source_text=source_text or user_text,
-        pending_transaction_draft=serialize_draft(transactions),
-        ai_draft_waiting_clarification=False,
-    )
+        reply_markup = _ai_mode_keyboard(AI_MODE_ACTION)
+    else:
+        await state.clear()
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
+            [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+        ])
     await thinking.edit_text(
-        _format_draft_text(transactions),
+        response_text,
         parse_mode="HTML",
-        reply_markup=_draft_keyboard(),
+        reply_markup=reply_markup,
     )
+    if saved_ids:
+        await maybe_send_onboarding_video(target.bot, user_id)
 
 
 async def get_user_context(user_id: int) -> str:
@@ -594,7 +614,11 @@ async def cb_ai_action_pending(call: CallbackQuery, state: FSMContext):
             ]),
         )
         return
-    await _send_transaction_draft(call.message, state, call.from_user.id, user_text)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _send_transaction_draft(call.message, state, call.from_user.id, user_text, keep_ai_state=False)
 
 
 @router.callback_query(F.data == "ai_draft_clarify")
@@ -638,9 +662,7 @@ async def cb_ai_draft_cancel(call: CallbackQuery, state: FSMContext):
 async def cb_ai_draft_commit(call: CallbackQuery, state: FSMContext):
     await call.answer()
     from app.services.transaction_drafts import deserialize_draft
-    from app.services.transaction_service import create_transaction
-    from app.services.transaction_public_ids import public_numbers_for_ids
-    from app.services.insights import build_first_transaction_insight
+    from app.services.transaction_entry import save_transactions_and_build_response
     from app.services.onboarding_video import maybe_send_onboarding_video
 
     data = await state.get_data()
@@ -652,21 +674,7 @@ async def cb_ai_draft_commit(call: CallbackQuery, state: FSMContext):
         )
         return
 
-    saved_ids = []
-    saved_items = []
-    for tx in transactions:
-        saved = await create_transaction(
-            user_id=call.from_user.id,
-            category_id=tx["category_id"],
-            amount=tx["amount"],
-            type_=tx["type"],
-            kind=tx.get("kind"),
-            comment=tx.get("comment") or "",
-            transaction_date=tx.get("transaction_date"),
-            pnl_period=tx.get("pnl_period"),
-        )
-        saved_ids.append(saved["id"])
-        saved_items.append((saved["id"], tx))
+    saved_ids, response_text = await save_transactions_and_build_response(call.from_user.id, transactions)
 
     await state.update_data(
         pending_transaction_draft=[],
@@ -675,34 +683,9 @@ async def cb_ai_draft_commit(call: CallbackQuery, state: FSMContext):
         ai_mode=AI_MODE_ACTION,
     )
 
-    public_ids = await public_numbers_for_ids(call.from_user.id, saved_ids)
-    lines = []
-    for index, (saved_id, tx) in enumerate(saved_items, start=1):
-        public_id = public_ids.get(int(saved_id), str(saved_id))
-        date_text = tx["transaction_date"].strftime("%d.%m")
-        comment = (tx.get("comment") or "").strip()
-        line = (
-            str(index) + ". #" + str(public_id) + " "
-            + date_text + " " + _format_draft_amount(tx)
-            + " — " + str(tx.get("category_name") or "")
-        )
-        if comment:
-            line += " | «" + comment + "»"
-        lines.append(line)
-
-    response_text = (
-        "✅ Записал " + str(len(saved_items)) + " операций:\n"
-        if len(saved_items) > 1
-        else "✅ Записал операцию:\n"
-    )
-    response_text += "\n".join(lines)
-    insight = await build_first_transaction_insight(call.from_user.id, saved_ids)
-    if insight:
-        response_text += "\n\n" + insight
-
     await call.message.answer(
         response_text,
-        parse_mode=None,
+        parse_mode="HTML",
         reply_markup=_ai_mode_keyboard(AI_MODE_ACTION),
     )
     await maybe_send_onboarding_video(call.message.bot, call.from_user.id)
