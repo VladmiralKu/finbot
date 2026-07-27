@@ -568,14 +568,36 @@ async def cb_add_income(call: CallbackQuery, state: FSMContext):
 
 @router.message(AddTransaction.choosing_category, F.text)
 async def msg_category_command(message: Message, state: FSMContext):
+    await _apply_manual_category_command(message, state, message.text or "")
+
+
+@router.message(AddTransaction.choosing_category, F.voice)
+async def msg_category_voice_command(message: Message, state: FSMContext):
+    from app.handlers.voice import format_recognized_text, transcribe_voice
+
+    thinking = await message.answer("Распознаю голос...")
+    try:
+        file = await message.bot.get_file(message.voice.file_id)
+        file_bytes = await message.bot.download_file(file.file_path)
+        text = await transcribe_voice(file_bytes.read())
+        if not text:
+            await thinking.edit_text("Не удалось распознать голос. Попробуй ещё раз.")
+            return
+        await thinking.edit_text(format_recognized_text(text), parse_mode="HTML")
+        await _apply_manual_category_command(message, state, text)
+    except Exception as e:
+        await thinking.edit_text("Ошибка распознавания: " + str(e))
+
+
+async def _apply_manual_category_command(message: Message, state: FSMContext, text: str):
     from app.services.category_commands import parse_category_command, apply_category_command
 
     data = await state.get_data()
     scope_type = data.get("tx_type")
-    command = await parse_category_command(message.from_user.id, message.text or "", scope_type)
+    command = await parse_category_command(message.from_user.id, text, scope_type)
     if not command or command.get("intent") == "unknown":
         await message.answer(
-            "Не понял команду. Можно выбрать категорию кнопкой или написать: «замени категорию X на Y».",
+            "Не понял команду. Можно выбрать категорию кнопкой или сказать: «замени категорию X на Y».",
         )
         return
 
