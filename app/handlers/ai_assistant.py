@@ -768,6 +768,16 @@ async def msg_ai_voice(message: Message, state: FSMContext):
             return
         await thinking.edit_text(format_recognized_text(text), parse_mode="HTML")
         data = await state.get_data()
+
+        from app.services.transaction_lookup import find_transaction_mentions, format_transaction_mentions
+        lookup_query, lookup_rows = await find_transaction_mentions(message.from_user.id, text, limit=10)
+        if lookup_query:
+            await message.answer(
+                format_transaction_mentions(lookup_query, lookup_rows),
+                reply_markup=_ai_mode_keyboard(data.get("ai_mode", AI_MODE_TALK)),
+            )
+            return
+
         mode = data.get("ai_mode", AI_MODE_TALK)
         if mode == AI_MODE_ACTION:
             from app.handlers.main import handle_intent_message

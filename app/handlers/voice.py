@@ -130,6 +130,18 @@ async def msg_voice(message: Message, state: FSMContext):
         await thinking.delete()
         await message.answer(format_recognized_text(text), parse_mode="HTML")
 
+        from app.services.transaction_lookup import find_transaction_mentions, format_transaction_mentions
+        lookup_query, lookup_rows = await find_transaction_mentions(message.from_user.id, text, limit=10)
+        if lookup_query:
+            await message.answer(
+                format_transaction_mentions(lookup_query, lookup_rows),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
+                    [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+                ]),
+            )
+            return
+
         text_lower = text.lower().strip()
         command_like = (
             "удали" in text_lower
