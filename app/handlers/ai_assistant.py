@@ -92,6 +92,37 @@ def _looks_like_complex_transaction_draft(text: str) -> bool:
     return date_like or separator_like
 
 
+async def _build_history_lookup_context(user_id: int, user_message: str | None) -> str:
+    from app.services.transaction_lookup import find_transaction_mentions
+
+    query, rows = await find_transaction_mentions(user_id, user_message, limit=10)
+    if not query:
+        return ""
+
+    if not rows:
+        return (
+            "\n\nПОИСК ПО ВСЕЙ БАЗЕ ПОЛЬЗОВАТЕЛЯ:\n"
+            "Запрос: " + query + "\n"
+            "Совпадений в транзакциях не найдено."
+        )
+
+    lines = []
+    for row in rows:
+        sign = "-" if row[3] == "expense" else "+"
+        comment = (" | " + row[5]) if row[5] else ""
+        lines.append(
+            row[1].strftime("%d.%m.%Y") + " "
+            + sign + "{:,.0f}".format(float(row[2])) + " "
+            + str(row[4] or "") + comment
+        )
+
+    return (
+        "\n\nПОИСК ПО ВСЕЙ БАЗЕ ПОЛЬЗОВАТЕЛЯ:\n"
+        "Запрос: " + query + "\n"
+        "Последние совпадения:\n" + "\n".join(lines)
+    )
+
+
 async def _send_transaction_draft(
     target,
     state: FSMContext,
@@ -172,7 +203,7 @@ async def _send_transaction_draft(
         await maybe_send_onboarding_video(target.bot, user_id)
 
 
-async def get_user_context(user_id: int) -> str:
+async def get_user_context(user_id: int, user_message: str | None = None) -> str:
     from app.database import get_monthly_summary, get_categories, fetchall, fetchone
     now = datetime.now()
 
@@ -236,6 +267,7 @@ async def get_user_context(user_id: int) -> str:
     notes_str = "\n".join(["- " + n[0] for n in notes]) if notes else "нет заметок"
 
     top_str = "\n".join(["- " + r[0] + ": " + "{:,.0f}".format(float(r[1])) + " руб." for r in top]) if top else "нет данных"
+    history_lookup = await _build_history_lookup_context(user_id, user_message)
 
     return (
         "КОНТЕКСТ ПОЛЬЗОВАТЕЛЯ:\n"
@@ -252,6 +284,7 @@ async def get_user_context(user_id: int) -> str:
         "КАТЕГОРИИ: " + cat_list + "\n\n"
         "ЦЕЛИ ПОЛЬЗОВАТЕЛЯ:\n" + goals_str + "\n\n"
         "ЗАМЕТКИ:\n" + notes_str
+        + history_lookup
     )
 
 
@@ -264,7 +297,7 @@ async def get_ai_response(
 ) -> tuple[str, list]:
     import os
 
-    context = await get_user_context(user_id)
+    context = await get_user_context(user_id, user_message)
 
     if mode == AI_MODE_ACTION:
         mode_prompt = (

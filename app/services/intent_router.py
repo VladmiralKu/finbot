@@ -71,6 +71,20 @@ def _is_lookup_request(lower: str) -> bool:
     return any(marker in lower for marker in lookup_markers)
 
 
+def _looks_like_transaction_history_lookup(lower: str) -> bool:
+    time_like = "когда" in lower or "последн" in lower
+    purchase_like = (
+        "покуп" in lower
+        or "купил" in lower
+        or "купила" in lower
+        or "трат" in lower
+        or "платил" in lower
+        or "платила" in lower
+        or "оплат" in lower
+    )
+    return time_like and purchase_like
+
+
 def _is_explicit_transaction_request(lower: str, source: str) -> bool:
     if source not in ("ai_chat", "ai_voice"):
         return True
@@ -297,6 +311,14 @@ async def parse_user_intent(user_id: int, text: str, source: str) -> dict:
             "intent": "show_recent",
             "confidence": 0.9,
             "params": {},
+            "needs_confirmation": False,
+        }
+
+    if _looks_like_transaction_history_lookup(lower):
+        return {
+            "intent": "lookup_transaction_history",
+            "confidence": 0.92,
+            "params": {"text": text},
             "needs_confirmation": False,
         }
 

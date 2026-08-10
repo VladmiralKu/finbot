@@ -2500,6 +2500,21 @@ async def handle_intent_message(message: Message, state: FSMContext, text: str, 
         )
         return True
 
+    if name == "lookup_transaction_history":
+        from app.services.transaction_lookup import find_transaction_mentions, format_transaction_mentions
+
+        query, rows = await find_transaction_mentions(message.from_user.id, params.get("text") or text, limit=10)
+        if not query:
+            return False
+        await message.answer(
+            format_transaction_mentions(query, rows),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 Открыть список", callback_data="recent")],
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
+            ]),
+        )
+        return True
+
     if name == "show_calendar":
         await message.answer(
             "Открываю платёжный календарь.",
