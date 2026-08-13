@@ -317,7 +317,7 @@ async def main():
     scheduler = setup_scheduler(bot)
 
     from app.webhook_server import start_webhook_server
-    await start_webhook_server()
+    await start_webhook_server(bot)
 
     try:
         logger.info("Bot started")
