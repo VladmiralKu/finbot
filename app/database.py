@@ -350,7 +350,8 @@ async def activate_subscription(user_id: int, tier: str = 'premium', days: int =
     now = datetime.now()
     row = await fetchone(
         """SELECT subscription_tier, premium_until,
-                  pending_subscription_tier, pending_subscription_until
+                  pending_subscription_tier, pending_subscription_until,
+                  paid_until
            FROM users
            WHERE id=%s""",
         (user_id,),
@@ -360,11 +361,13 @@ async def activate_subscription(user_id: int, tier: str = 'premium', days: int =
 
     current_tier = row[0] or "free"
     current_until = row[1]
+    paid_until = row[4]
     is_active = current_tier != "free" and (current_until is None or current_until > now)
+    is_paid_active = paid and paid_until and paid_until > now
     new_rank = _tier_rank(tier)
     current_rank = _tier_rank(current_tier)
 
-    if is_active and new_rank < current_rank:
+    if is_active and (is_paid_active or new_rank < current_rank):
         start_at = current_until or now
         until = start_at + timedelta(days=days)
         await execute(
@@ -381,6 +384,8 @@ async def activate_subscription(user_id: int, tier: str = 'premium', days: int =
 
     start_at = current_until if is_active and new_rank == current_rank and current_until else now
     until = start_at + timedelta(days=days)
+    reset_ai_now = not (is_active and new_rank == current_rank)
+    next_ai_reset_at = start_at if is_active and new_rank == current_rank else None
     if paid:
         await execute(
             """UPDATE users
@@ -392,9 +397,11 @@ async def activate_subscription(user_id: int, tier: str = 'premium', days: int =
                    pending_subscription_until=NULL,
                    pending_subscription_is_paid=FALSE,
                    bonus_started_at=NULL,
-                   bonus_until=NULL
+                   bonus_until=NULL,
+                   ai_usage_reset_at=CASE WHEN %s THEN %s ELSE ai_usage_reset_at END,
+                   ai_usage_next_reset_at=%s
                WHERE id=%s""",
-            (tier, tier == 'premium', until, until, user_id),
+            (tier, tier == 'premium', until, until, reset_ai_now, now, next_ai_reset_at, user_id),
         )
     else:
         await execute(
@@ -406,9 +413,11 @@ async def activate_subscription(user_id: int, tier: str = 'premium', days: int =
                    pending_subscription_until=NULL,
                    pending_subscription_is_paid=FALSE,
                    bonus_started_at=NULL,
-                   bonus_until=NULL
+                   bonus_until=NULL,
+                   ai_usage_reset_at=CASE WHEN %s THEN %s ELSE ai_usage_reset_at END,
+                   ai_usage_next_reset_at=%s
                WHERE id=%s""",
-            (tier, tier == 'premium', until, user_id),
+            (tier, tier == 'premium', until, reset_ai_now, now, next_ai_reset_at, user_id),
         )
     return {
         "status": "extended" if is_active and new_rank == current_rank else "activated",
@@ -419,6 +428,29 @@ async def activate_subscription(user_id: int, tier: str = 'premium', days: int =
 
 async def activate_stars_payment(user_id: int, tier: str = 'premium', days: int = 30):
     return await activate_subscription(user_id, tier=tier, days=days, paid=True)
+
+
+async def apply_ai_usage_reset_if_due(user_id: int):
+    row = await fetchone(
+        "SELECT ai_usage_reset_at, ai_usage_next_reset_at FROM users WHERE id=%s",
+        (user_id,),
+    )
+    if not row:
+        return None
+
+    reset_at, next_reset_at = row
+    if next_reset_at:
+        from datetime import datetime
+        if next_reset_at <= datetime.now():
+            await execute(
+                """UPDATE users
+                   SET ai_usage_reset_at=%s,
+                       ai_usage_next_reset_at=NULL
+                   WHERE id=%s""",
+                (next_reset_at, user_id),
+            )
+            return next_reset_at
+    return reset_at
 
 
 async def refresh_subscription_state(user_id: int) -> str:
@@ -455,9 +487,11 @@ async def refresh_subscription_state(user_id: int) -> str:
                    pending_subscription_until=NULL,
                    pending_subscription_is_paid=FALSE,
                    bonus_started_at=NULL,
-                   bonus_until=NULL
+                   bonus_until=NULL,
+                   ai_usage_reset_at=%s,
+                   ai_usage_next_reset_at=NULL
                WHERE id=%s""",
-            (pending_tier, pending_tier == 'premium', pending_until, pending_is_paid, pending_until, user_id),
+            (pending_tier, pending_tier == 'premium', pending_until, pending_is_paid, pending_until, until, user_id),
         )
         tier = pending_tier
         until = pending_until

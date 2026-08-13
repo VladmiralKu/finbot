@@ -115,6 +115,8 @@ async def main():
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_is_paid BOOLEAN DEFAULT FALSE")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_started_at TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_until TIMESTAMP")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_usage_reset_at TIMESTAMP")
+        await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_usage_next_reset_at TIMESTAMP")
         await execute("""
             UPDATE users
             SET paid_until = premium_until

@@ -382,7 +382,7 @@ async def get_ai_response(
 
 
 async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
-    from app.database import fetchone, get_user_tier
+    from app.database import apply_ai_usage_reset_if_due, fetchone, get_user_tier
     tier = await get_user_tier(user_id)
     if tier == 'free':
         return False, 0, 0
@@ -391,12 +391,14 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
     limit = limits.get(tier, 0)
 
     now = datetime.now()
+    month_start = datetime(now.year, now.month, 1)
+    ai_reset_at = await apply_ai_usage_reset_if_due(user_id)
+    usage_start = max(month_start, ai_reset_at) if ai_reset_at else month_start
     row = await fetchone(
         """SELECT COUNT(*) FROM ai_usage
            WHERE user_id=%s
-             AND EXTRACT(YEAR FROM used_at)=%s
-             AND EXTRACT(MONTH FROM used_at)=%s""",
-        (user_id, now.year, now.month)
+             AND used_at >= %s""",
+        (user_id, usage_start)
     )
     used = int(row[0]) if row else 0
     return used < limit, used, limit
