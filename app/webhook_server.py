@@ -6,7 +6,7 @@ from aiohttp import web
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from yookassa import Configuration, Payment
 from yookassa.domain.common import SecurityHelper
-from app.database import activate_stars_payment, fetchone, execute
+from app.database import activate_stars_payment, add_ai_usage_boost, fetchone, execute
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,7 @@ TIER_NAMES = {
     'base': 'База',
     'premium': 'Премиум',
 }
+BOOSTER_MESSAGES = 30
 
 
 def _date_label(value) -> str:
@@ -87,6 +88,28 @@ async def _notify_payment_success(user_id: int, tier: str, months: int, activati
         logger.warning("YooKassa: failed to notify user %s about payment %s: %s", user_id, payment_id, e)
 
 
+async def _notify_booster_success(user_id: int, messages: int, payment_id: str):
+    if not _bot:
+        logger.warning("YooKassa: bot instance is not configured, cannot notify user %s", user_id)
+        return
+
+    try:
+        await _bot.send_message(
+            user_id,
+            f"Оплата прошла! Бустер активирован: +{messages} сообщений ИИ добавлено.",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
+            ]),
+        )
+        await execute(
+            "UPDATE yookassa_payments SET notified_at = NOW() WHERE provider_payment_id = %s",
+            (payment_id,),
+        )
+    except Exception as e:
+        logger.warning("YooKassa: failed to notify user %s about booster %s: %s", user_id, payment_id, e)
+
+
 def _get_client_ip(request):
     # Railway и большинство прокси передают реальный IP через X-Forwarded-For
     forwarded = request.headers.get("X-Forwarded-For")
@@ -126,7 +149,26 @@ async def yookassa_webhook(request):
                 return web.Response(status=200, text="OK")
 
             metadata = real_payment.metadata or {}
+            kind = metadata.get("kind", "subscription")
             user_id = metadata.get("user_id")
+            if kind == "booster" and user_id:
+                user_id = int(user_id)
+                messages = int(metadata.get("messages", BOOSTER_MESSAGES))
+                is_new_payment = await _claim_yookassa_payment(payment_id, user_id, "booster", 0)
+                if not is_new_payment:
+                    logger.info("YooKassa: payment %s already processed, skipping", payment_id)
+                    return web.Response(status=200, text="OK")
+
+                await add_ai_usage_boost(user_id, messages)
+                await _notify_booster_success(user_id, messages, payment_id)
+                logger.info(
+                    "YooKassa: booster +%s messages for user %s (payment %s verified)",
+                    messages,
+                    user_id,
+                    payment_id,
+                )
+                return web.Response(status=200, text="OK")
+
             tier = metadata.get("tier")
             months = int(metadata.get("months", 1))
 

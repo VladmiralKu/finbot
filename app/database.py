@@ -453,6 +453,17 @@ async def apply_ai_usage_reset_if_due(user_id: int):
     return reset_at
 
 
+async def add_ai_usage_boost(user_id: int, messages: int):
+    await execute(
+        """INSERT INTO ai_usage_boost (user_id, messages_added, messages_used, created_at, updated_at)
+           VALUES (%s, %s, 0, NOW(), NOW())
+           ON CONFLICT (user_id) DO UPDATE
+           SET messages_added = ai_usage_boost.messages_added + EXCLUDED.messages_added,
+               updated_at = NOW()""",
+        (user_id, messages),
+    )
+
+
 async def refresh_subscription_state(user_id: int) -> str:
     from datetime import datetime, timedelta
 

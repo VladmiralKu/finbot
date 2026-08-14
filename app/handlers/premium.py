@@ -7,7 +7,7 @@ from aiogram.types import (
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from app.database import get_subscription_tier, get_promo, use_promo, activate_stars_payment
+from app.database import get_subscription_tier, get_promo, use_promo, activate_stars_payment, add_ai_usage_boost
 
 router = Router()
 
@@ -16,6 +16,8 @@ SCAN_TEXT_STARS = 100
 BASE_STARS = 196
 PREMIUM_STARS = 541
 BOOSTER_STARS = 70
+BOOSTER_PRICE = 10000
+BOOSTER_MESSAGES = 30
 
 # Цены в рублях (копейки для ЮКассы), копейки всегда округляем вниз
 PRICES = {
@@ -61,7 +63,7 @@ def premium_keyboard(tier):
             [InlineKeyboardButton(text="📝 Скан и текст — 149 руб (100 ⭐)", callback_data="tier_scan_text")],
             [InlineKeyboardButton(text="⭐ База — 290 руб (196 ⭐)", callback_data="tier_base")],
             [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
-            [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
+            [InlineKeyboardButton(text=f"⭐ Бустер +{BOOSTER_MESSAGES} сообщений — 100 руб / 70 ⭐", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -71,7 +73,7 @@ def premium_keyboard(tier):
             [InlineKeyboardButton(text="📝 Продлить Скан и текст", callback_data="tier_scan_text")],
             [InlineKeyboardButton(text="⭐ База — 290 руб (196 ⭐)", callback_data="tier_base")],
             [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
-            [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
+            [InlineKeyboardButton(text=f"⭐ Бустер +{BOOSTER_MESSAGES} сообщений — 100 руб / 70 ⭐", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -81,7 +83,7 @@ def premium_keyboard(tier):
             [InlineKeyboardButton(text="⭐ Продлить Базу", callback_data="tier_base")],
             [InlineKeyboardButton(text="📝 Скан и текст после Базы", callback_data="tier_scan_text")],
             [InlineKeyboardButton(text="💎 Премиум — 800 руб (541 ⭐)", callback_data="tier_premium")],
-            [InlineKeyboardButton(text="⭐ Бустер +80 сообщений — 70 звёзд (~100 руб)", callback_data="buy_booster")],
+            [InlineKeyboardButton(text=f"⭐ Бустер +{BOOSTER_MESSAGES} сообщений — 100 руб / 70 ⭐", callback_data="buy_booster")],
             [InlineKeyboardButton(text="💝 Поддержать проект", callback_data="donate")],
             [InlineKeyboardButton(text="🎁 Промокод", callback_data="enter_promo")],
             [InlineKeyboardButton(text="Меню", callback_data="main_menu")],
@@ -145,6 +147,14 @@ def payment_keyboard(tier, months):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def booster_payment_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Картой — 100 руб", callback_data="pay_booster_rub")],
+        [InlineKeyboardButton(text=f"⭐ Звёздами Telegram ({BOOSTER_STARS} ⭐)", callback_data="pay_booster_stars")],
+        [InlineKeyboardButton(text="Назад", callback_data="premium")],
+    ])
+
+
 def _date_label(value) -> str:
     return value.strftime("%d.%m.%Y") if value else "позже"
 
@@ -181,14 +191,14 @@ async def cb_premium(call: CallbackQuery):
             "Без голосового ввода\n\n"
             "База — 290 руб/мес (196 ⭐)\n"
             "Всё из Скан и текст + голосовой ввод\n"
-            "ИИ-ассистент (150 сообщений/мес)\n\n"
+            "ИИ-ассистент (60 сообщений/мес)\n\n"
             "Премиум — 800 руб/мес (541 ⭐)\n"
             "Всё из База +\n"
             "ИИ-ассистент безлимит\n"
             "Свободные беседы с ИИ на любые темы\n"
             "Выгрузка в Excel\n\n"
             "Бустер — 100 руб (70 ⭐)\n"
-            "+80 сообщений ИИ разово (для тарифов Скан и текст / База)\n\n"
+            f"+{BOOSTER_MESSAGES} сообщений ИИ разово (для тарифов Скан и текст / База)\n\n"
             "Оплата картой или звёздами Telegram"
         )
     elif tier == 'scan_text':
@@ -198,15 +208,15 @@ async def cb_premium(call: CallbackQuery):
             "Голосовой ввод недоступен на этом тарифе\n\n"
             "Можно продлить заранее — оплаченные дни не сгорят.\n\n"
             "Upgrade до Премиум — голос, безлимитный ИИ, свободные беседы + Excel за 800 руб/мес\n\n"
-            "Или купи Бустер +80 сообщений за 100 руб"
+            f"Или купи Бустер +{BOOSTER_MESSAGES} сообщений за 100 руб"
         )
     elif tier == 'base':
         text = (
             "У тебя активен тариф База!\n\n"
-            "Доступно: голос, чеки, отчёты, ИИ (150 сообщений/мес)\n\n"
+            "Доступно: голос, чеки, отчёты, ИИ (60 сообщений/мес)\n\n"
             "Можно продлить заранее или поставить тариф ниже следующим — дни не сгорят.\n\n"
             "Upgrade до Премиум — безлимитный ИИ, свободные беседы + Excel за 800 руб/мес\n\n"
-            "Или купи Бустер +80 сообщений за 100 руб"
+            f"Или купи Бустер +{BOOSTER_MESSAGES} сообщений за 100 руб"
         )
     elif tier == 'premium':
         text = (
@@ -336,12 +346,84 @@ async def cb_buy_booster(call: CallbackQuery):
             show_alert=True
         )
         return
+    await call.message.edit_text(
+        f"Бустер +{BOOSTER_MESSAGES} сообщений ИИ\nСтоимость: 100 руб или {BOOSTER_STARS} ⭐\n\nВыбери способ оплаты:",
+        parse_mode=None,
+        reply_markup=booster_payment_keyboard()
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "pay_booster_rub")
+async def cb_pay_booster_rub(call: CallbackQuery):
+    import os, uuid
+    from yookassa import Configuration, Payment
+    from app.database import get_subscription_tier
+
+    tier = await get_subscription_tier(call.from_user.id)
+    if tier not in BOOSTER_ELIGIBLE_TIERS:
+        await call.answer(
+            "Бустер доступен только для тарифов Скан и текст / База.",
+            show_alert=True
+        )
+        return
+
+    Configuration.account_id = os.environ.get("YOOKASSA_SHOP_ID")
+    Configuration.secret_key = os.environ.get("YOOKASSA_SECRET_KEY")
+
+    try:
+        payment = Payment.create({
+            "amount": {"value": f"{BOOSTER_PRICE / 100:.2f}", "currency": "RUB"},
+            "confirmation": {"type": "redirect", "return_url": "https://t.me/Balansfinansbot"},
+            "capture": True,
+            "description": f"Баланс бот — Бустер +{BOOSTER_MESSAGES} сообщений",
+            "receipt": {
+                "customer": {"email": "noreply@balansbot.ru"},
+                "items": [{
+                    "description": f"Бустер +{BOOSTER_MESSAGES} сообщений ИИ",
+                    "quantity": "1.00",
+                    "amount": {"value": f"{BOOSTER_PRICE / 100:.2f}", "currency": "RUB"},
+                    "vat_code": 1,
+                    "payment_mode": "full_payment",
+                    "payment_subject": "service",
+                }]
+            },
+            "metadata": {
+                "kind": "booster",
+                "user_id": str(call.from_user.id),
+                "messages": BOOSTER_MESSAGES,
+            }
+        }, str(uuid.uuid4()))
+
+        url = payment.confirmation.confirmation_url
+        await call.message.edit_text(
+            f"Оплата бустера +{BOOSTER_MESSAGES} сообщений\n100 руб\n\nНажми кнопку для оплаты картой:",
+            parse_mode=None,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Оплатить картой", url=url)],
+                [InlineKeyboardButton(text="Назад", callback_data="buy_booster")],
+            ])
+        )
+    except Exception as e:
+        await call.answer(f"Ошибка: {str(e)[:100]}", show_alert=True)
+
+
+@router.callback_query(F.data == "pay_booster_stars")
+async def cb_pay_booster_stars(call: CallbackQuery):
+    from app.database import get_subscription_tier
+    tier = await get_subscription_tier(call.from_user.id)
+    if tier not in BOOSTER_ELIGIBLE_TIERS:
+        await call.answer(
+            "Бустер доступен только для тарифов Скан и текст / База.",
+            show_alert=True
+        )
+        return
     await call.message.answer_invoice(
-        title="Бустер +80 сообщений",
-        description="Разовое пополнение: +80 сообщений ИИ-ассистента",
-        payload="booster_80",
+        title=f"Бустер +{BOOSTER_MESSAGES} сообщений",
+        description=f"Разовое пополнение: +{BOOSTER_MESSAGES} сообщений ИИ-ассистента",
+        payload="booster_30",
         currency="XTR",
-        prices=[LabeledPrice(label="Бустер +80 сообщений (~100 руб)", amount=BOOSTER_STARS)],
+        prices=[LabeledPrice(label=f"Бустер +{BOOSTER_MESSAGES} сообщений (~100 руб)", amount=BOOSTER_STARS)],
     )
     await call.answer()
 
@@ -393,17 +475,10 @@ async def successful_payment(message: Message):
         )
         return
 
-    if payload == "booster_80":
-        from app.database import execute
-        await execute(
-            """INSERT INTO ai_usage_boost (user_id, messages_added, created_at)
-               VALUES (%s, 80, NOW())
-               ON CONFLICT (user_id) DO UPDATE
-               SET messages_added = ai_usage_boost.messages_added + 80""",
-            (message.from_user.id,)
-        )
+    if payload in {"booster_30", "booster_80"}:
+        await add_ai_usage_boost(message.from_user.id, BOOSTER_MESSAGES)
         await message.answer(
-            "Бустер активирован! +80 сообщений ИИ добавлено.",
+            f"Бустер активирован! +{BOOSTER_MESSAGES} сообщений ИИ добавлено.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="Меню", callback_data="main_menu")]
             ])

@@ -118,6 +118,17 @@ async def main():
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_usage_reset_at TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_usage_next_reset_at TIMESTAMP")
         await execute("""
+            CREATE TABLE IF NOT EXISTS ai_usage_boost (
+                user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                messages_added INT NOT NULL DEFAULT 0,
+                messages_used INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await execute("ALTER TABLE ai_usage_boost ADD COLUMN IF NOT EXISTS messages_used INT NOT NULL DEFAULT 0")
+        await execute("ALTER TABLE ai_usage_boost ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
+        await execute("""
             UPDATE users
             SET paid_until = premium_until
             WHERE paid_until IS NULL

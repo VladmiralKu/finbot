@@ -13,6 +13,8 @@ router = Router()
 AI_MODE_TALK = "talk"
 AI_MODE_ACTION = "action"
 AI_MODE_PROFILE = "profile"
+AI_LIMITS = {'scan_text': 60, 'base': 60, 'premium': 9999, 'business': 9999}
+BOOSTER_ELIGIBLE_TIERS = {'scan_text', 'base'}
 
 
 def _ai_mode_keyboard(mode: str) -> InlineKeyboardMarkup:
@@ -387,8 +389,9 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
     if tier == 'free':
         return False, 0, 0
 
-    limits = {'scan_text': 60, 'base': 150, 'premium': 9999, 'business': 9999}
-    limit = limits.get(tier, 0)
+    base_limit = AI_LIMITS.get(tier, 0)
+    if base_limit >= 9999:
+        return True, 0, base_limit
 
     now = datetime.now()
     month_start = datetime(now.year, now.month, 1)
@@ -401,15 +404,57 @@ async def check_ai_limit(user_id: int) -> tuple[bool, int, int]:
         (user_id, usage_start)
     )
     used = int(row[0]) if row else 0
+    boost_limit = 0
+    if tier in BOOSTER_ELIGIBLE_TIERS:
+        boost = await fetchone(
+            "SELECT COALESCE(messages_added, 0), COALESCE(messages_used, 0) FROM ai_usage_boost WHERE user_id=%s",
+            (user_id,),
+        )
+        if boost:
+            current_period_boost_used = min(max(0, used - base_limit), int(boost[1]))
+            boost_limit = max(0, int(boost[0]) - int(boost[1]) + current_period_boost_used)
+    limit = base_limit + boost_limit
     return used < limit, used, limit
 
 
 async def log_ai_usage(user_id: int):
-    from app.database import execute
+    from app.database import apply_ai_usage_reset_if_due, execute, fetchone, get_user_tier
+    tier = await get_user_tier(user_id)
+    base_limit = AI_LIMITS.get(tier, 0)
+
+    should_consume_boost = False
+    if tier in BOOSTER_ELIGIBLE_TIERS:
+        now = datetime.now()
+        month_start = datetime(now.year, now.month, 1)
+        ai_reset_at = await apply_ai_usage_reset_if_due(user_id)
+        usage_start = max(month_start, ai_reset_at) if ai_reset_at else month_start
+        used_row = await fetchone(
+            """SELECT COUNT(*) FROM ai_usage
+               WHERE user_id=%s
+                 AND used_at >= %s""",
+            (user_id, usage_start),
+        )
+        boost_row = await fetchone(
+            "SELECT COALESCE(messages_added, 0), COALESCE(messages_used, 0) FROM ai_usage_boost WHERE user_id=%s",
+            (user_id,),
+        )
+        used = int(used_row[0]) if used_row else 0
+        if boost_row and used >= base_limit and int(boost_row[1]) < int(boost_row[0]):
+            should_consume_boost = True
+
     await execute(
         "INSERT INTO ai_usage (user_id, usage_type, used_at, month_year) VALUES (%s, 'chat', NOW(), TO_CHAR(NOW(), 'YYYY-MM'))",
         (user_id,)
     )
+    if should_consume_boost:
+        await execute(
+            """UPDATE ai_usage_boost
+               SET messages_used = messages_used + 1,
+                   updated_at = NOW()
+               WHERE user_id=%s
+                 AND messages_used < messages_added""",
+            (user_id,),
+        )
 
 
 def _normalize_goal_text(text: str) -> str:
