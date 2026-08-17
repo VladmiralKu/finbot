@@ -13,8 +13,12 @@ class BroadcastForwardState(StatesGroup):
     waiting_post = State()
 
 
-class WelcomeVoiceState(StatesGroup):
-    waiting_voice = State()
+class WelcomePhotoState(StatesGroup):
+    waiting_photo = State()
+
+
+class WelcomeVideoState(StatesGroup):
+    waiting_video = State()
 
 
 class OnboardingVideoState(StatesGroup):
@@ -103,33 +107,74 @@ async def cmd_admin_stats(message: Message):
 async def cmd_set_welcome_voice(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    await state.set_state(WelcomeVoiceState.waiting_voice)
     await message.answer(
-        "Кидай сюда приветственное голосовое. Можно просто переслать его из твоей группы.\n\n"
-        "Я сохраню его для /start. Без лишней возни, как мы любим."
+        "Приветственное голосовое больше не используется.\n\n"
+        "Теперь для /start используются фото и видео:\n"
+        "/setwelcomephoto — загрузить приветственное фото\n"
+        "/setwelcomevideo — загрузить приветственное видео"
     )
 
 
-@router.message(WelcomeVoiceState.waiting_voice, F.voice)
-async def msg_set_welcome_voice(message: Message, state: FSMContext):
+@router.message(Command("setwelcomephoto"))
+async def cmd_set_welcome_photo(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(WelcomePhotoState.waiting_photo)
+    await message.answer(
+        "Кидай сюда приветственное фото для /start.\n\n"
+        "Если добавишь подпись к фото, я сохраню её тоже."
+    )
+
+
+@router.message(WelcomePhotoState.waiting_photo, F.photo)
+async def msg_set_welcome_photo(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.clear()
 
     from app.database import set_bot_setting
 
-    await set_bot_setting("welcome_voice_file_id", message.voice.file_id)
+    await set_bot_setting("welcome_photo_file_id", message.photo[-1].file_id)
+    await set_bot_setting("welcome_photo_caption", message.caption or "")
+    await message.answer("Готово. Приветственное фото для /start сохранено.")
+
+
+@router.message(WelcomePhotoState.waiting_photo)
+async def msg_set_welcome_photo_wrong(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("Нужно именно фото. Пришли картинку, подпись можно добавить прямо к ней.")
+
+
+@router.message(Command("setwelcomevideo"))
+async def cmd_set_welcome_video(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(WelcomeVideoState.waiting_video)
     await message.answer(
-        "Готово. Теперь /start начинается с твоего голосового.\n\n"
-        "Пользователь услышит тебя первым, а потом уже я начну финансово приставать."
+        "Кидай сюда приветственное видео для /start.\n\n"
+        "Если добавишь подпись к видео, я сохраню её тоже."
     )
 
 
-@router.message(WelcomeVoiceState.waiting_voice)
-async def msg_set_welcome_voice_wrong(message: Message, state: FSMContext):
+@router.message(WelcomeVideoState.waiting_video, F.video)
+async def msg_set_welcome_video(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-    await message.answer("Мне нужно именно голосовое. Текстом харизму не прикрутим.")
+    await state.clear()
+
+    from app.database import set_bot_setting
+
+    await set_bot_setting("welcome_video_file_id", message.video.file_id)
+    await set_bot_setting("welcome_video_caption", message.caption or "")
+    await message.answer("Готово. Приветственное видео для /start сохранено.")
+
+
+@router.message(WelcomeVideoState.waiting_video)
+async def msg_set_welcome_video_wrong(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await message.answer("Нужно именно видео. Пришли ролик, подпись можно добавить прямо к нему.")
 
 
 @router.message(Command("setonboardingvideo"))

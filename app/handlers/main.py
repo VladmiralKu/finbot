@@ -257,20 +257,28 @@ async def render_categories_text(user_id: int) -> str:
     return text
 
 
-async def _send_welcome_voice(message: Message):
+async def _send_welcome_media(message: Message):
     from app.database import get_bot_setting
 
     try:
-        voice_file_id = await get_bot_setting("welcome_voice_file_id")
+        photo_file_id = await get_bot_setting("welcome_photo_file_id")
+        photo_caption = await get_bot_setting("welcome_photo_caption")
+        video_file_id = await get_bot_setting("welcome_video_file_id")
+        video_caption = await get_bot_setting("welcome_video_caption")
     except Exception:
-        return
-    if not voice_file_id:
         return
 
-    try:
-        await message.answer_voice(voice_file_id)
-    except Exception:
-        return
+    if photo_file_id:
+        try:
+            await message.answer_photo(photo_file_id, caption=photo_caption or None, parse_mode=None)
+        except Exception:
+            pass
+
+    if video_file_id:
+        try:
+            await message.answer_video(video_file_id, caption=video_caption or None, parse_mode=None)
+        except Exception:
+            pass
 
 
 @router.message(CommandStart())
@@ -283,7 +291,7 @@ async def cmd_start(message: Message, state: FSMContext):
         user.full_name or "",
         user.language_code or "ru",
     )
-    await _send_welcome_voice(message)
+    await _send_welcome_media(message)
 
     from app.handlers.ai_assistant import AI_MODE_PROFILE, AIState
 

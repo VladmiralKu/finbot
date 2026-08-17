@@ -108,6 +108,41 @@ async def main():
 
     try:
         from app.database import execute
+        await execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                id SERIAL PRIMARY KEY,
+                code VARCHAR(32) UNIQUE NOT NULL,
+                tier VARCHAR(16) DEFAULT 'premium',
+                days INT DEFAULT 30,
+                max_uses INT DEFAULT 1,
+                used_count INT DEFAULT 0,
+                expires_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await execute("""
+            CREATE TABLE IF NOT EXISTS promo_uses (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+                promo_id INT REFERENCES promo_codes(id),
+                used_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await execute("CREATE INDEX IF NOT EXISTS idx_promo_code ON promo_codes(code)")
+        await execute("""
+            INSERT INTO promo_codes (code, tier, days, max_uses, expires_at)
+            VALUES ('VKTEST30', 'base', 30, NULL, NULL)
+            ON CONFLICT (code) DO UPDATE
+            SET tier = EXCLUDED.tier,
+                days = EXCLUDED.days,
+                max_uses = EXCLUDED.max_uses,
+                expires_at = EXCLUDED.expires_at
+        """)
+    except Exception as e:
+        logger.warning("Migration promo VKTEST30: " + str(e))
+
+    try:
+        from app.database import execute
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_until TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_video_sent_at TIMESTAMP")
         await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_subscription_tier VARCHAR(50)")
